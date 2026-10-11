@@ -26,6 +26,9 @@ and README's Installation notes point there.
   operators cannot verify. Recovery is re-running the failed `release` job.
   It has no `environment:`, so it adds no approval prompt, and re-running it
   does not re-run `docker-publish-release`.
+
+  > **Partly superseded by MAN-298**: `release` now runs in `ghcr-publish`, so re-running it asks for approval; it still does not re-run `docker-publish-release`.
+
 - **`actions/attest-build-provenance`, pinned to v4.2.2 by SHA.** The ticket
   names it. Since v4 it is a thin wrapper over `actions/attest`, which
   upstream recommends for new code; both produce the same

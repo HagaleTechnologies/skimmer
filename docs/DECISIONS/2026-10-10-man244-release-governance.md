@@ -51,6 +51,8 @@ The separate `publish-latest` job retains its own environment protection and
 may request another approval. Manual dispatch keeps `dispatch-<run_id>` and
 never creates a version release or updates `latest`.
 
+> **Partly superseded by MAN-298** (2026-10-11-man298-first-release.md): the Release still waits for this approval but no longer for successful image publication.
+
 ## Evidence correction and trust limits
 
 Earlier MAN-244 research inferred that no actor could bypass the tag ruleset

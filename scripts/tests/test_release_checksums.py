@@ -30,6 +30,7 @@ DECISION_PATH_RE = re.compile(r"docs/DECISIONS/[0-9]{4}-[0-9]{2}-[0-9]{2}-man80-
 RUNBOOK = "docs/RUNBOOKS/release.md"
 RUNBOOK_HEADING = "## Verifying a downloaded release"
 RUNBOOK_LINK = RUNBOOK + "#verifying-a-downloaded-release"
+RETRY_HEADING = "## If the image publish fails"
 # The release's five archives, as the build matrix names them; sorted under any collation.
 ARCHIVES = (
     "manta-linux-arm64.tar.gz",
@@ -101,6 +102,21 @@ def publish_step():
     """The release job's softprops/action-gh-release step."""
     steps = release_steps()
     return steps[index_where(steps, lambda s: uses(s).startswith("softprops/action-gh-release@"), "Release")]
+
+
+def fenced_commands(text):
+    """Command lines of the ```sh / ```console blocks in text, `\\` continuations joined and a
+    leading `$ ` prompt dropped."""
+    commands, pending = [], ""
+    for block in re.findall(r"^```(?:sh|console)\n(.*?)^```$", text, re.M | re.S):
+        for line in block.splitlines():
+            line = line.strip()
+            if line.endswith("\\"):
+                pending += line[:-1] + " "
+                continue
+            commands.append((pending + line).removeprefix("$ "))
+            pending = ""
+    return commands
 
 
 def gnu_sha256sum():
@@ -237,6 +253,32 @@ class OperatorDocsTests(unittest.TestCase):
         for command in (LINUX_CHECK, MACOS_CHECK) + ATTEST_FLAGS:
             with self.subTest(command=command):
                 self.assertIn(command, section)
+
+    def test_runbook_says_how_to_retry_only_the_image_publish(self):
+        text = self.read(RUNBOOK)
+        self.assertIn(RETRY_HEADING + "\n", text, f"{RUNBOOK} has no {RETRY_HEADING!r}")
+        start = text.index(RETRY_HEADING + "\n")
+        end = text.find("\n## ", start + 1)
+        section = text[start:] if end == -1 else text[start:end]
+        reruns = [c for c in fenced_commands(section) if c.startswith("gh run rerun ")]
+        self.assertTrue(any("--failed" in c for c in reruns), f"{RETRY_HEADING!r} gives no gh run rerun --failed")
+        flat = " ".join(section.split())
+        for needle in ("publish-latest", "docker buildx imagetools create"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, flat)
+
+    def test_runbook_commands_name_the_repository_and_keep_every_platform(self):
+        commands = fenced_commands(self.read(RUNBOOK))
+        repo_commands = [c for c in commands if re.match(r"gh (run|release|workflow|attestation) ", c)]
+        self.assertTrue(repo_commands)
+        for command in repo_commands:
+            with self.subTest(command=command):
+                self.assertIn("--repo HagaleTechnologies/manta", command,
+                              "gh outside a clone has no repository to default to")
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertFalse(command.startswith("docker pull "),
+                                 "a single-platform engine pulls one platform of the multi-arch image")
 
     @unittest.skipIf(shutil.which("sh") is None or shutil.which("awk") is None, "needs sh and awk")
     def test_verify_block_refuses_gh_older_than_2_102_0(self):
