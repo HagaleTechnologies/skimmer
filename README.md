@@ -327,9 +327,14 @@ only if that config also carries at least one `[[rbn_uplink]]` block.
   source-health counters. Some gauges are still placeholders;
   ARCHITECTURE §8 says which.
 
-`decode` and `listen` also print decoded text or `--json` events on
-stdout. That output is a debugging aid, not a stable interface — the
-servers above are.
+`run` (alias `listen`) also prints a `SPOT:` line on stdout for each
+confirmed spot, and decoded text on stderr, one line per track labelled
+with its track number, frequency and speed. With a `[server]` table the
+decoded text is off unless you pass `--decoded-text`, so a service log
+holds spots and diagnostics only. `--json` prints every decoder event and
+spot as JSON Lines on stdout instead. `decode` prints its decoded text on
+stdout. This terminal output is a debugging aid, not a stable interface —
+the servers above are.
 
 The decode path is deterministic: the same file in produces byte-identical
 spot logs out. That is a hard requirement, and CI enforces it with golden
@@ -393,6 +398,10 @@ Pre-1.0, and pre-first-release. What is true today:
   over `legacy` (`as_word` 27%→56%, `framed` 13%→32%) but falls short of
   the 60%/40% bar, and most VR/V golden vectors still fail. Not yet a
   default-engine candidate.
+- **Measured sensitivity:** `manta bench sensitivity` regenerates recall
+  and character error rate against SNR (500 Hz) on synthetic AWGN and
+  Watterson-faded signals; the curve at landing is in
+  [docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md](docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md).
 - **No tagged release yet**, so the container image above is empty until
   the first tag.
 
@@ -444,7 +453,8 @@ versioning rule.
 channelizer constants, noise-floor estimator, track state machine,
 decoder equations, confidence formulas, determinism rules, golden
 vectors, config-key table · [ROADMAP.md](ROADMAP.md) — milestones M0 to
-M4 with acceptance criteria.
+M4 with acceptance criteria · `manta bench sensitivity` — the
+recall/CER-vs-SNR curve on synthetic signals, regenerable from any build.
 
 ## Related projects
 

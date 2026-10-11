@@ -10,6 +10,7 @@ pub mod keyer;
 pub mod noise;
 pub mod oracle;
 pub mod scene;
+pub mod sensitivity;
 pub mod vectors;
 pub mod wav;
 

@@ -189,8 +189,14 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # MAN-219: --locked makes cargo fail ("cannot update the lock file ...
+      # because --locked was passed") when Cargo.lock no longer matches the
+      # Cargo.toml dependency graph, instead of silently re-resolving it and
+      # passing. That silence hid the 2026-10-05 drift on main (#118 + #197,
+      # fixed by hand in #209). To fix a red run, build once locally without
+      # --locked and commit the updated Cargo.lock. fmt never reads the lockfile.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
       # MAN-65: the release pipeline's tag grammar and :latest recency
       # logic are testable without pushing a tag, and this rides the
       # ALREADY-REQUIRED `test` check (ubuntu + macos) rather than a new
@@ -249,8 +255,9 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2.9.1
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - run: cargo clippy -p manta-input -p manta-cli --all-targets --features soapy -- -D warnings
-      - run: cargo test -p manta-input -p manta-cli --features soapy
+      # --locked: see the MAN-219 note in the test job above.
+      - run: cargo clippy -p manta-input -p manta-cli --all-targets --features soapy --locked -- -D warnings
+      - run: cargo test -p manta-input -p manta-cli --features soapy --locked
   # Same MAN-243 routing as `test` above -- see that job's own comment.
   test-hpsdr:
     if: >-
@@ -277,8 +284,9 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2.9.1
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - run: cargo clippy -p manta-input -p manta-cli --all-targets --features hpsdr -- -D warnings
-      - run: cargo test -p manta-input -p manta-cli --features hpsdr
+      # --locked: see the MAN-219 note in the test job above.
+      - run: cargo clippy -p manta-input -p manta-cli --all-targets --features hpsdr --locked -- -D warnings
+      - run: cargo test -p manta-input -p manta-cli --features hpsdr --locked
 
   # Relays each matrix leg's OWN real conclusion onto the corresponding explicit check-run
   # create-ci-check made on head_sha -- a job-level `needs.test.result` alone is a single

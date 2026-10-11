@@ -117,6 +117,11 @@ It exits with status 1 before it opens the receiver or any listener;
 it. Under a service manager the service fails, is started again, and logs
 this line each time until you fix the config.
 
+**What the service logs.** manta writes a `SPOT:` line to stdout for each
+confirmed spot, and its startup, status, warning and error lines to
+stderr. It does not log decoded text; add `--decoded-text` to the command
+line to include it, one line per track.
+
 ## Linux: systemd
 
 Requires systemd 247 or newer (`systemctl --version`). Install the binary
