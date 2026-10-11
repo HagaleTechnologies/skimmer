@@ -280,8 +280,26 @@ by every `deCall` it saw) reported that call within the tolerances. Look at the
 `## Node-only, uncorroborated` list too: repeated fixed-frequency busts point at a decoder or RF
 problem, not at stations only this node heard.
 
-Frequency calibration: in `shadow-compare`'s `## Calibration` table, the `Freq delta (Hz)` row's
-`Median` column is the signed median Δf, node minus primary. If its magnitude is over 20 Hz, set
+Frequency calibration: when the node's receiver can hear a time signal (WWV, WWVH, BPM, RWM) or an
+NCDXF beacon, prefer `manta calibrate`. It measures the correction against that carrier and, after
+you answer `y`, saves it as `freq_correction_ppm` in `[input]`. The SDR serves one program at a
+time, so record a planned stop, stop the service while it measures, and start it again.
+`--tune-hz 9998500` borrows the receiver at 10 MHz for the measurement only; run it with `sudo`,
+because the config file belongs to root:
+
+```sh
+sudo -u manta python3 /opt/manta/scripts/field-node.py note \
+  --ledger /var/lib/manta-field/ledger.jsonl --kind planned --reason "stage 1 freq calibration"
+sudo systemctl stop manta-field.service
+sudo manta calibrate --config /etc/manta/manta-field.toml --tune-hz 9998500
+manta config check --config /etc/manta/manta-field.toml
+sudo systemctl start manta-field.service
+```
+
+If it finds no carrier, try another time of day, or `--duration 180` for a beacon.
+`shadow-compare` cross-checks the result against the primary, and is the fallback when no
+reference is audible: in its `## Calibration` table, the `Freq delta (Hz)` row's `Median` column
+is the signed median Δf, node minus primary. If its magnitude is over 20 Hz, set
 
 ```
 freq_correction_ppm = -(median Δf) / freq_hz × 1e6

@@ -21,6 +21,12 @@ git history and `docs/DECISIONS/`.
 
 ## [Unreleased]
 
+### Added
+
+- `manta calibrate` measures the receiver's frequency error against a WWV,
+  WWVH, BPM, RWM or NCDXF beacon carrier and, after confirmation, saves
+  `freq_correction_ppm` to `[input]` in the config file (MAN-127).
+
 ### Changed
 
 - `manta --version` (and `-V`) names the exact build: crate version, git

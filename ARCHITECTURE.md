@@ -502,7 +502,8 @@ validation (MAN-28). Dedupe (step 5) still applies.
   `[[rbn_uplink]]`, `[input]` (source type and its keys, dial frequency,
   capture rate, ppm correction), `[spot]` (watch list, blocklist and notch
   files, and `cty.dat`/`master.scp` overrides), `[detector]` (thresholds, timers, track cap) and `[decode]` —
-  read by `run`, `soak` and `doctor` (`--config`, else `MANTA_CONFIG`) and
+  read by `run`, `soak`, `doctor` and `calibrate` (`--config`, else
+  `MANTA_CONFIG`) and
   by `decode`/`oracle`. Precedence is flag, then `MANTA_<TABLE>_<KEY>`
   environment variable, then file, then default; `decode` and `oracle`
   never read the environment. Unknown tables, keys and `MANTA_*` variables
@@ -516,6 +517,13 @@ validation (MAN-28). Dedupe (step 5) still applies.
   scaffold with every key commented out at its default, pinned to the code
   defaults and the loader's key list by tests (MAN-76,
   `docs/DECISIONS/2026-10-07-man76-config-check-init.md`).
+  `manta calibrate` resolves `[input]` the way `doctor` does, measures the
+  receiver's frequency error against a known carrier
+  (`manta-dsp::carrier` estimates it, `manta-engine::calibrate` picks the
+  reference and gates the result), and after confirmation edits only
+  `input.freq_correction_ppm` in place in the file it read, keeping every
+  other byte, the file's mode and owner (MAN-127,
+  `docs/DECISIONS/2026-10-11-man127-calibrate-command.md`).
 - **`tracing` + `tracing-subscriber` with `EnvFilter`, implemented for
   `manta-server`'s three listeners (telnet, JSON/WS, metrics)** — landed
   2026-09-03 (MAN-59, `docs/DECISIONS/2026-09-03-man59-connection-audit-logging.md`):

@@ -263,6 +263,30 @@ no password. Read
 [docs/RUNBOOKS/network-exposure.md](docs/RUNBOOKS/network-exposure.md)
 before you widen either.
 
+### Calibrate the receiver's frequency
+
+Spot frequencies are only as accurate as the receiver's oscillator.
+`manta calibrate` listens to a carrier whose frequency is known exactly (the
+WWV, WWVH, BPM or RWM time signals, or an NCDXF beacon) and reports the
+`freq_correction_ppm` that corrects the receiver. Stop `manta run` first if
+your receiver serves only one program at a time.
+
+```sh
+manta calibrate --config manta.toml
+manta calibrate --config manta.toml --tune-hz 9998500
+```
+
+The first command measures a reference that already sits inside the
+configured receiver's passband. The second retunes a KiwiSDR, SoapySDR or
+HPSDR receiver to 9998500 Hz for this measurement only, which puts the
+10 MHz time signal 1.5 kHz above centre; the 40 m example above needs it.
+Either way, manta prints the measured frequency, the correction and the
+evidence for it, then asks before it saves `freq_correction_ppm` to
+`[input]` in your config file. Nothing else in the file changes. Restart
+`manta run` to apply the new value. In a script, `--write` saves without
+asking. A measurement takes 60 seconds; NCDXF beacons share each frequency
+in turns, so give them `--duration 180`.
+
 ## Running unattended
 
 To run a node as a service that starts at boot and restarts after a

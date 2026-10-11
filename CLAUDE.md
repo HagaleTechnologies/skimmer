@@ -56,6 +56,9 @@ MAN-79: `--cty`/`--scp` and `[spot].cty_path`/`scp_path` override the
 vendored `cty.dat`/`master.scp` at run time. `run`/`listen`/`soak`/`doctor`/
 `config check` warn when the built-in `cty.dat` is more than 180 days old.
 See docs/DECISIONS/2026-10-10-man79-operator-cty-scp-override.md.
+MAN-127: `manta calibrate` measures the receiver's ppm offset against a
+known carrier and saves `[input].freq_correction_ppm` after confirmation —
+see docs/DECISIONS/2026-10-11-man127-calibrate-command.md.
 
 ## Documents (read in this order)
 

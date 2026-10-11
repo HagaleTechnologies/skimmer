@@ -9,8 +9,10 @@ use manta_input::IqSource;
 use std::path::{Path, PathBuf};
 
 mod build_info;
+mod calibrate_cmd;
 mod config;
 mod config_cmd;
+mod config_edit;
 mod reconnect;
 use reconnect::ReconnectingSource;
 
@@ -681,6 +683,192 @@ enum Command {
         json: bool,
         #[command(flatten)]
         filters: FilterOpts,
+    },
+    /// Measure the receiver's frequency error against a known signal.
+    ///
+    /// Listens for --duration seconds to a carrier whose frequency is known
+    /// exactly -- a time-signal station (WWV, WWVH, BPM, RWM) or an NCDXF
+    /// beacon -- and reports the freq_correction_ppm that corrects the
+    /// receiver. It picks a reference inside the receiver's passband by
+    /// itself; --tune-hz points the configured receiver at one, and
+    /// --reference-hz names any other carrier you know. Offers to save the
+    /// value to the config file.
+    // MAN-127: see calibrate_cmd.rs and
+    // docs/DECISIONS/2026-10-11-man127-calibrate-command.md. The source flag
+    // block is copied from `Doctor`, as run/soak/doctor each copy it.
+    Calibrate {
+        /// How long to measure, in seconds (10 to 3600). NCDXF beacons take
+        /// turns on each frequency, so give them 180.
+        #[arg(long, default_value_t = 60)]
+        duration: u64,
+        /// Measure against this carrier, in Hz, instead of the built-in list.
+        /// Use only a signal whose frequency you know to a fraction of a
+        /// hertz.
+        #[arg(long, value_parser = parse_reference_hz)]
+        reference_hz: Option<f64>,
+        /// How far from the reference to look, in parts per million (1 to
+        /// 1000). Widen it for a receiver without a temperature-compensated
+        /// oscillator.
+        #[arg(long, default_value_t = manta_engine::calibrate::DEFAULT_SEARCH_PPM, value_parser = parse_search_ppm)]
+        search_ppm: f64,
+        /// Retune the configured receiver to this centre frequency, in Hz,
+        /// for this measurement only. KiwiSDR, SoapySDR and HPSDR sources.
+        /// Keep the reference 1 to 2 kHz from the centre, e.g. 9998500 for
+        /// the 10 MHz time signal.
+        #[arg(long, value_parser = parse_tune_hz)]
+        #[cfg_attr(all(feature = "hpsdr", feature = "soapy"), arg(conflicts_with_all = ["kiwi_host", "hpsdr_host", "soapy_driver"]))]
+        #[cfg_attr(all(feature = "hpsdr", not(feature = "soapy")), arg(conflicts_with_all = ["kiwi_host", "hpsdr_host"]))]
+        #[cfg_attr(all(not(feature = "hpsdr"), feature = "soapy"), arg(conflicts_with_all = ["kiwi_host", "soapy_driver"]))]
+        #[cfg_attr(
+            not(any(feature = "hpsdr", feature = "soapy")),
+            arg(conflicts_with = "kiwi_host")
+        )]
+        tune_hz: Option<f64>,
+        /// Sound-card input device; matched by substring. Defaults to the
+        /// system default input.
+        #[arg(long, conflicts_with = "source", help_heading = "Audio input")]
+        device: Option<String>,
+        /// Replay a WAV file instead of listening to a live device.
+        ///
+        /// Decoded as fast as the machine manages, not in real time, so a
+        /// 60-second file usually finishes sooner than that. Useful for
+        /// demos and repeatable testing.
+        #[arg(long, conflicts_with = "device", help_heading = "Audio input")]
+        source: Option<PathBuf>,
+        /// KiwiSDR receiver hostname. Requires --kiwi-freq-hz.
+        #[arg(help_heading = "KiwiSDR source")]
+        #[cfg_attr(all(feature = "hpsdr", feature = "soapy"), arg(long, conflicts_with_all = ["device", "source", "hpsdr_host", "soapy_driver"], requires = "kiwi_freq_hz"))]
+        #[cfg_attr(all(feature = "hpsdr", not(feature = "soapy")), arg(long, conflicts_with_all = ["device", "source", "hpsdr_host"], requires = "kiwi_freq_hz"))]
+        #[cfg_attr(all(not(feature = "hpsdr"), feature = "soapy"), arg(long, conflicts_with_all = ["device", "source", "soapy_driver"], requires = "kiwi_freq_hz"))]
+        #[cfg_attr(not(any(feature = "hpsdr", feature = "soapy")), arg(long, conflicts_with_all = ["device", "source"], requires = "kiwi_freq_hz"))]
+        kiwi_host: Option<String>,
+        /// KiwiSDR receiver port.
+        #[arg(
+            long,
+            default_value = "8073",
+            requires = "kiwi_host",
+            help_heading = "KiwiSDR source"
+        )]
+        kiwi_port: u16,
+        /// Receiver centre frequency, in Hz. Required with --kiwi-host.
+        #[arg(
+            long = "kiwi-freq-hz",
+            alias = "kiwi-freq",
+            requires = "kiwi_host",
+            help_heading = "KiwiSDR source"
+        )]
+        kiwi_freq_hz: Option<f64>,
+        /// KiwiSDR password. Leave empty for public receivers that do not
+        /// ask for one.
+        #[arg(
+            long,
+            requires = "kiwi_host",
+            default_value = "",
+            help_heading = "KiwiSDR source"
+        )]
+        kiwi_password: String,
+        /// SoapySDR device arguments, e.g. "driver=rtlsdr".
+        ///
+        /// Requires --soapy-freq-hz and --soapy-rate-hz. Available only in
+        /// builds made with the `soapy` feature.
+        #[cfg(feature = "soapy")]
+        #[arg(help_heading = "SoapySDR source")]
+        #[cfg_attr(feature = "hpsdr", arg(long, conflicts_with_all = ["device", "source", "hpsdr_host", "kiwi_host"]))]
+        #[cfg_attr(not(feature = "hpsdr"), arg(long, conflicts_with_all = ["device", "source", "kiwi_host"]))]
+        soapy_driver: Option<String>,
+        /// Receiver centre frequency, in Hz. Required with --soapy-driver.
+        #[cfg(feature = "soapy")]
+        #[arg(
+            long = "soapy-freq-hz",
+            alias = "soapy-freq",
+            requires = "soapy_driver",
+            help_heading = "SoapySDR source"
+        )]
+        soapy_freq_hz: Option<f64>,
+        /// Sample rate, in Hz. Required with --soapy-driver.
+        #[cfg(feature = "soapy")]
+        #[arg(
+            long = "soapy-rate-hz",
+            alias = "soapy-rate",
+            requires = "soapy_driver",
+            help_heading = "SoapySDR source"
+        )]
+        soapy_rate_hz: Option<f64>,
+        /// Receiver gain, in dB. Omit to let the device use AGC.
+        #[cfg(feature = "soapy")]
+        #[arg(long, requires = "soapy_driver", help_heading = "SoapySDR source")]
+        soapy_gain: Option<f64>,
+        /// HPSDR/Hermes device hostname or IP address.
+        ///
+        /// Requires --hpsdr-freq-hz and --hpsdr-rate-hz. Available only in
+        /// builds made with the `hpsdr` feature.
+        #[cfg(feature = "hpsdr")]
+        #[arg(help_heading = "HPSDR source")]
+        #[cfg_attr(feature = "soapy", arg(long, conflicts_with_all = ["device", "source", "kiwi_host", "soapy_driver"]))]
+        #[cfg_attr(not(feature = "soapy"), arg(long, conflicts_with_all = ["device", "source", "kiwi_host"]))]
+        hpsdr_host: Option<String>,
+        /// HPSDR/Hermes control port.
+        #[cfg(feature = "hpsdr")]
+        #[arg(
+            long,
+            default_value_t = manta_input::hpsdr::CONTROL_PORT,
+            requires = "hpsdr_host",
+            help_heading = "HPSDR source"
+        )]
+        hpsdr_port: u16,
+        /// Receiver centre frequency, in Hz. Required with --hpsdr-host.
+        #[cfg(feature = "hpsdr")]
+        #[arg(
+            long = "hpsdr-freq-hz",
+            alias = "hpsdr-freq",
+            requires = "hpsdr_host",
+            value_parser = parse_hpsdr_freq_hz,
+            help_heading = "HPSDR source"
+        )]
+        hpsdr_freq_hz: Option<f64>,
+        /// Sample rate, in Hz. Required with --hpsdr-host.
+        #[cfg(feature = "hpsdr")]
+        #[arg(
+            long = "hpsdr-rate-hz",
+            alias = "hpsdr-rate",
+            requires = "hpsdr_host",
+            value_parser = parse_hpsdr_rate_hz,
+            help_heading = "HPSDR source"
+        )]
+        hpsdr_rate_hz: Option<f64>,
+        /// Decimate the source to this sample rate, in Hz, before decoding.
+        ///
+        /// Must divide the source's own rate by a power of two, and the
+        /// result must itself be a rate the channelizer supports. Omit to
+        /// decode at the source's native rate.
+        #[arg(long, value_parser = parse_capture_rate_hz)]
+        capture_rate_hz: Option<f64>,
+        /// Read --source as a raw complex-IQ recording rather than ordinary
+        /// mono audio.
+        ///
+        /// Without this, --source is taken as mono real audio at 48000 Hz.
+        /// A stereo audio recording and a two-channel IQ capture cannot be
+        /// told apart from the WAV header alone, so say which you have.
+        #[arg(long)]
+        source_iq: bool,
+        /// Radio dial frequency, in Hz. See `run --dial-freq-hz`; without it
+        /// an audio source's reported frequencies, and the report's
+        /// `center_freq_hz`, are baseband offsets.
+        #[arg(long, value_parser = parse_dial_freq_hz, help_heading = "Audio input")]
+        dial_freq_hz: Option<f64>,
+        /// TOML config file whose [input] table names the receiver. The
+        /// measured value is saved to that table.
+        ///
+        /// Falls back to $MANTA_CONFIG. Flags override the file, and
+        /// MANTA_INPUT_<KEY> environment variables sit between the two.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Save the measured value to the config file without asking.
+        #[arg(long)]
+        write: bool,
+        /// Print the report as one JSON object. Never asks before saving.
+        #[arg(long, help_heading = "Output")]
+        json: bool,
     },
     /// Check or create a config file, without starting anything.
     #[command(subcommand)]
@@ -1357,6 +1545,34 @@ fn parse_dial_freq_hz(s: &str) -> std::result::Result<f64, String> {
         .parse()
         .map_err(|e| format!("invalid --dial-freq-hz {s:?}: {e}"))?;
     check_dial_freq_hz("--dial-freq-hz", hz)
+}
+
+// MAN-127: `calibrate`'s frequency/ppm flags.
+fn parse_reference_hz(s: &str) -> std::result::Result<f64, String> {
+    let hz: f64 = s
+        .parse()
+        .map_err(|e| format!("invalid --reference-hz {s:?}: {e}"))?;
+    check_dial_freq_hz("--reference-hz", hz)
+}
+
+fn parse_tune_hz(s: &str) -> std::result::Result<f64, String> {
+    let hz: f64 = s
+        .parse()
+        .map_err(|e| format!("invalid --tune-hz {s:?}: {e}"))?;
+    check_dial_freq_hz("--tune-hz", hz)
+}
+
+fn parse_search_ppm(s: &str) -> std::result::Result<f64, String> {
+    use manta_engine::calibrate::{MAX_SEARCH_PPM, MIN_SEARCH_PPM};
+    let ppm: f64 = s
+        .parse()
+        .map_err(|e| format!("invalid --search-ppm {s:?}: {e}"))?;
+    if !ppm.is_finite() || !(MIN_SEARCH_PPM..=MAX_SEARCH_PPM).contains(&ppm) {
+        return Err(format!(
+            "--search-ppm must be between {MIN_SEARCH_PPM} and {MAX_SEARCH_PPM}, got {s}"
+        ));
+    }
+    Ok(ppm)
 }
 
 /// `parse_dial_freq_hz`'s check, shared with `input.center_freq_hz`
@@ -2882,6 +3098,9 @@ struct Resolved {
     spot: SpotResolved,
     /// Printed to stderr by the caller, never stdout.
     notes: Vec<String>,
+    /// The flag that replaced a typed `[input]` from the file, if one did:
+    /// that file's receiver is then not the one being opened (MAN-127).
+    replaced_file_source: Option<&'static str>,
 }
 
 /// D6: merges the command line over the loaded file + environment layer.
@@ -2902,8 +3121,10 @@ fn resolve(cli: CliOverrides, loaded: &config::Loaded) -> Result<Resolved> {
         cli.capture_rate_hz,
         cli.replay_epoch,
     );
+    let mut replaced_file_source = None;
     let spec = match (cli.source_selector(), &loaded.input.source) {
         (Some(flag), Some(file_source)) => {
+            replaced_file_source = Some(flag);
             // A typed [input] describes one receiver: its ppm and dial
             // belong to it, not to whatever the command line names instead.
             notes.push(format!(
@@ -2928,6 +3149,7 @@ fn resolve(cli: CliOverrides, loaded: &config::Loaded) -> Result<Resolved> {
         replay_epoch: replay_epoch.or(shared.replay_epoch),
         spot,
         notes,
+        replaced_file_source,
     })
 }
 
@@ -3014,11 +3236,13 @@ fn bundled_cty_warning(cty_overridden: bool, now: std::time::SystemTime) -> Opti
     ))
 }
 
-fn prepare_live(
+/// Load the config (`--config`, else `MANTA_CONFIG`) with the `MANTA_*`
+/// overlay, merge the CLI over it and print the merge notes: the part of
+/// `prepare_live` that `calibrate` shares, which needs no pipeline config.
+fn load_and_resolve(
     cli: CliOverrides,
     config_flag: Option<PathBuf>,
-    cli_engine: Option<Engine>,
-) -> Result<Prepared> {
+) -> Result<(Option<PathBuf>, config::Loaded, Resolved)> {
     let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
     let config_path = config_flag.or_else(|| config::config_path_from_env(&vars));
     let loaded = config::load(config_path.as_deref(), config::Env::Read(&vars))?;
@@ -3026,6 +3250,15 @@ fn prepare_live(
     for note in &resolved.notes {
         eprintln!("{note}");
     }
+    Ok((config_path, loaded, resolved))
+}
+
+fn prepare_live(
+    cli: CliOverrides,
+    config_flag: Option<PathBuf>,
+    cli_engine: Option<Engine>,
+) -> Result<Prepared> {
+    let (config_path, loaded, resolved) = load_and_resolve(cli, config_flag)?;
     let decode = merge_cli_engine(cli_engine, loaded.decode.clone());
     let mut pipeline = build_pipeline_config(
         resolved.freq_correction_ppm,
@@ -4467,6 +4700,76 @@ fn main() -> Result<()> {
                 print_doctor_report(&report);
             }
         }
+        Command::Calibrate {
+            duration,
+            reference_hz,
+            search_ppm,
+            tune_hz,
+            device,
+            source,
+            kiwi_host,
+            kiwi_port,
+            kiwi_freq_hz,
+            kiwi_password,
+            #[cfg(feature = "soapy")]
+            soapy_driver,
+            #[cfg(feature = "soapy")]
+            soapy_freq_hz,
+            #[cfg(feature = "soapy")]
+            soapy_rate_hz,
+            #[cfg(feature = "soapy")]
+            soapy_gain,
+            #[cfg(feature = "hpsdr")]
+            hpsdr_host,
+            #[cfg(feature = "hpsdr")]
+            hpsdr_port,
+            #[cfg(feature = "hpsdr")]
+            hpsdr_freq_hz,
+            #[cfg(feature = "hpsdr")]
+            hpsdr_rate_hz,
+            capture_rate_hz,
+            source_iq,
+            dial_freq_hz,
+            config,
+            write,
+            json,
+        } => calibrate_cmd::run(calibrate_cmd::CalibrateArgs {
+            duration_secs: duration,
+            reference_hz,
+            search_ppm,
+            tune_hz,
+            write,
+            json,
+            config,
+            cli: CliOverrides {
+                device,
+                source,
+                source_iq,
+                kiwi: KiwiOpts {
+                    host: kiwi_host,
+                    port: kiwi_port,
+                    freq: kiwi_freq_hz,
+                    password: kiwi_password,
+                },
+                #[cfg(feature = "soapy")]
+                soapy: SoapyOpts {
+                    driver: soapy_driver,
+                    freq: soapy_freq_hz,
+                    rate: soapy_rate_hz,
+                    gain: soapy_gain,
+                },
+                #[cfg(feature = "hpsdr")]
+                hpsdr: HpsdrOpts {
+                    host: hpsdr_host,
+                    port: hpsdr_port,
+                    freq: hpsdr_freq_hz,
+                    rate: hpsdr_rate_hz,
+                },
+                capture_rate_hz,
+                dial_freq_hz,
+                ..CliOverrides::none()
+            },
+        })?,
         Command::Config(ConfigCommand::Check { config }) => config_cmd::check(config)?,
         Command::Config(ConfigCommand::Init { out, force }) => config_cmd::init(&out, force)?,
     }
@@ -6672,13 +6975,24 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
         ("engine", "decode.engine"),
     ];
     /// Flags with no config key, by design.
-    const CLI_ONLY: &[&str] = &["json", "duration", "config", "path", "help", "version"];
+    const CLI_ONLY: &[&str] = &[
+        "json",
+        "duration",
+        "config",
+        "path",
+        "help",
+        "version",
+        "reference_hz",
+        "search_ppm",
+        "tune_hz",
+        "write",
+    ];
 
     #[test]
     fn every_config_backed_flag_maps_to_a_key() {
         use clap::CommandFactory;
         let cli = Cli::command();
-        for name in ["run", "soak", "doctor", "decode"] {
+        for name in ["run", "soak", "doctor", "decode", "calibrate"] {
             let sub = cli.find_subcommand(name).unwrap();
             for arg in sub.get_arguments() {
                 let id = arg.get_id().as_str();

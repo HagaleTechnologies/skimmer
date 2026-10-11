@@ -449,3 +449,39 @@ fn runbook_names_every_stage_and_both_scenarios() {
         "{RUNBOOK} must state the Stage 1 go/no-go decision"
     );
 }
+
+/// MAN-127: Stage 1's frequency calibration offers `manta calibrate` against a
+/// known carrier, and keeps `shadow-compare`'s formula as the cross-check and
+/// the fallback when no reference is audible.
+#[test]
+fn runbook_offers_manta_calibrate_for_stage_1() {
+    let runbook = doc(RUNBOOK);
+    let start = runbook
+        .find("\n## 5. Stage 1")
+        .expect("the runbook has a `## 5. Stage 1` section");
+    let stage1 = &runbook[start + 1..];
+    let stage1 = &stage1[..stage1.find("\n## ").unwrap_or(stage1.len())];
+    let at = stage1
+        .find("Frequency calibration")
+        .expect("Stage 1 has a frequency-calibration paragraph");
+    let calibration = &stage1[at..];
+    let calibration = &calibration[..calibration
+        .find("On **NO-GO**")
+        .unwrap_or(calibration.len())];
+    for needle in [
+        "manta calibrate --config /etc/manta/manta-field.toml",
+        "shadow-compare",
+        "freq_correction_ppm = -(median Δf) / freq_hz × 1e6",
+    ] {
+        assert!(
+            calibration.contains(needle),
+            "{RUNBOOK}'s Stage 1 frequency calibration never says {needle:?}"
+        );
+    }
+    let calibrate = calibration.find("manta calibrate").unwrap();
+    let formula = calibration.find("freq_correction_ppm = -(median").unwrap();
+    assert!(
+        calibrate < formula,
+        "{RUNBOOK} must offer `manta calibrate` before the shadow-compare fallback"
+    );
+}

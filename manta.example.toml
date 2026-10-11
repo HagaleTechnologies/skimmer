@@ -134,7 +134,7 @@ station_callsign = "N0CALL"
 
 # The settings below apply to any receiver type, or none.
 
-# Oscillator correction for this receiver, parts per million, -1000 to 1000.
+# Oscillator correction for this receiver, parts per million, -1000 to 1000. `manta calibrate` measures it.
 #freq_correction_ppm = 0.0
 
 # Your radio's dial frequency, Hz, for a sound card or WAV recording that
