@@ -127,6 +127,9 @@ fn validate(reply: &[u8], sent: &[u8; 8], t3: f64) -> Result<f64, String> {
     if reply[1] == 0 {
         return Err("refused the request (a kiss-of-death reply)".to_string());
     }
+    if reply[1] > 15 {
+        return Err(format!("sent a reserved stratum ({})", reply[1]));
+    }
     if reply[24..32] != sent[..] {
         return Err("sent a reply that does not match the request".to_string());
     }
@@ -384,6 +387,23 @@ mod tests {
         let sent = sent_at(100.0);
         let err = validate(&reply(0, 4, 0, sent, 130.0, 130.0), &sent, 100.2);
         assert!(err.unwrap_err().contains("kiss-of-death"));
+    }
+
+    #[test]
+    fn reply_strata_are_limited_to_synchronized_sources() {
+        let sent = sent_at(100.0);
+        for stratum in 1..=15 {
+            assert!(
+                validate(&reply(0, 4, stratum, sent, 100.0, 100.0), &sent, 100.0).is_ok(),
+                "stratum {stratum}"
+            );
+        }
+        for stratum in 16..=255 {
+            assert!(
+                validate(&reply(0, 4, stratum, sent, 100.0, 100.0), &sent, 100.0).is_err(),
+                "reserved stratum {stratum} was accepted"
+            );
+        }
     }
 
     #[test]

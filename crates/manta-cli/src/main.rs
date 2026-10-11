@@ -6876,19 +6876,13 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
     /// Flags with no config key, by design.
     const CLI_ONLY: &[&str] = &[
         "json",
-<<<<<<< HEAD
-=======
         "decoded_text",
->>>>>>> 72ca072ce1b3557406981ba227b584c9e22196b1
         "duration",
         "config",
         "path",
         "help",
         "version",
-<<<<<<< HEAD
         "ntp_server",
-=======
->>>>>>> 72ca072ce1b3557406981ba227b584c9e22196b1
     ];
 
     #[test]

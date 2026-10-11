@@ -30,7 +30,7 @@ there.
   Raspberry Pi OS (`libasound2t64` on Debian 13). Without it, `./manta`
   does not start at all and the system prints
   `error while loading shared libraries: libasound.so.2: cannot open shared object file`;
-  see [setup-checks](../docs/RUNBOOKS/setup-checks.md#manta-will-not-start-at-all).
+  see [setup-checks](https://github.com/HagaleTechnologies/manta/blob/main/docs/RUNBOOKS/setup-checks.md#manta-will-not-start-at-all).
 - **macOS:** release binaries are not signed or notarized. If macOS
   refuses to run `./manta` because it was downloaded from the internet,
   clear the flag with `xattr -d com.apple.quarantine ./manta`.
@@ -97,7 +97,7 @@ each enabled uplink target, and that the receiver opens and hears
 something, printing `PASS`, `WARN`, `FAIL` or `SKIP` with a fix for every
 problem, and exits 1 when a check fails. Run it before you install the
 service, not while it runs. See
-[setup-checks](../docs/RUNBOOKS/setup-checks.md).
+[setup-checks](https://github.com/HagaleTechnologies/manta/blob/main/docs/RUNBOOKS/setup-checks.md).
 
 **Uplinks.** Leave the `[[rbn_uplink]]` block commented out. If you enable
 an uplink later, `dry_run` defaults to `true`: it connects and logs in but
