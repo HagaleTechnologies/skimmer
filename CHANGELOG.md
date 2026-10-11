@@ -23,11 +23,24 @@ git history and `docs/DECISIONS/`.
 
 ### Added
 
+<<<<<<< HEAD
 - `manta decode --center-freq-hz HZ` sets the recording's RF centre
   frequency, overriding its `<name>.json` sidecar. Without the flag, a
   recording with no sidecar (or a sidecar whose `center_freq_hz` is not
   positive) gets a warning that its frequencies are baseband offsets,
   and is decoded at a 0.0 centre (MAN-131).
+=======
+- `manta run` takes `-v`/`-vv` and `-q`/`-qq`/`-qqq` and
+  `--log-level <LEVEL>`, each shorthand for `RUST_LOG=<level>` that
+  overrides it, and `--log-format json`, which writes every stderr log line
+  as one JSON object for a log aggregator (MAN-124).
+
+### Fixed
+
+- `manta run`'s log lines carry no colour escape codes when stderr is not a
+  terminal (a file, a pipe, the journal or a container log); `NO_COLOR` is
+  still honoured on a terminal (MAN-124).
+>>>>>>> 5c3c64e0d15dd23f1f34f890357312e208119611
 
 ### Changed
 

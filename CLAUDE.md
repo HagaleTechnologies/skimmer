@@ -56,6 +56,10 @@ MAN-79: `--cty`/`--scp` and `[spot].cty_path`/`scp_path` override the
 vendored `cty.dat`/`master.scp` at run time. `run`/`listen`/`soak`/`doctor`/
 `config check` warn when the built-in `cty.dat` is more than 180 days old.
 See docs/DECISIONS/2026-10-10-man79-operator-cty-scp-override.md.
+MAN-124: `run`'s log is plain text off a terminal (colour only on a TTY,
+`NO_COLOR` honoured); `-v`/`-q`/`--log-level` are shorthand for `RUST_LOG`;
+`--log-format json` makes every stderr line a JSON record — see
+docs/DECISIONS/2026-10-10-man124-log-output.md.
 MAN-116: `manta bench sensitivity` produces the recall/CER-vs-SNR (500 Hz)
 table over AWGN/Watterson good/poor × WPM, deterministic per build and
 flags — see docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md.
