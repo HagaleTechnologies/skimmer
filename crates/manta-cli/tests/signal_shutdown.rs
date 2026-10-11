@@ -2,17 +2,19 @@
 //! path SIGINT already uses, and the process must exit 0 rather than with a
 //! signal-derived code.
 //!
-//! Nothing else in this repo exercises real OS signal delivery, and no
-//! `#[cfg]` in this crate can observe a *dependency's* feature flag, so this
-//! file is the only thing standing between `ctrlc`'s `termination` feature
-//! and a silent regression: drop the feature from the workspace `Cargo.toml`
-//! and `sigterm_exits_zero_through_the_drain_path` goes red.
+//! Since MAN-78, SIGTERM and SIGHUP go through `signal-hook` on Unix (ctrlc
+//! keeps SIGINT), and these tests pin that: drop the SIGTERM registration
+//! and `sigterm_exits_zero_through_the_drain_path` goes red. SIGHUP drains
+//! only without a `[server]` table; `config_reload.rs` pins the daemon-mode
+//! reload.
 #![cfg(unix)]
 
+mod common;
+
+use common::{fixture_wav, wait_bounded};
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// The LAST line `manta listen` prints at startup, and therefore the point
@@ -29,52 +31,10 @@ use std::time::{Duration, Instant};
 /// below is the test that pins the earlier boundary.
 const READY_MARKER: &str = "manta: listening;";
 
-/// Replay seconds in the fixture. Only has to outlast the test window --
-/// `control_still_running` below turns "too short for this machine" into an
-/// explicit failure rather than a false pass.
-const FIXTURE_SECONDS: f64 = 300.0;
-
 /// Generous upper bound on signal -> exit. The real number here is ~20 ms
 /// (no clients connected, so `tasks::await_all` returns immediately); this
 /// only has to be far below the fixture's natural EOF.
 const EXIT_BUDGET: Duration = Duration::from_secs(15);
-
-/// One 300 s fixture for the whole file: ~115 MB and a full render, not
-/// worth paying three times. Written under `CARGO_TARGET_TMPDIR` (cleaned
-/// by `cargo clean`) rather than a `tempfile::TempDir`: Rust never runs
-/// destructors for statics, so a shared `TempDir` here would leak 115 MB
-/// into the system temp directory on every run. Rendered to a
-/// process-unique name and atomically renamed into place, so two
-/// concurrent `cargo test` invocations cannot observe a half-written WAV.
-fn fixture_wav() -> &'static Path {
-    static WAV: OnceLock<PathBuf> = OnceLock::new();
-    WAV.get_or_init(|| {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("man85-signal-fixture");
-        let wav = root.join("v1.wav");
-        if wav.exists() {
-            return wav;
-        }
-        let staging = root.with_extension(format!("staging.{}", std::process::id()));
-        std::fs::create_dir_all(&staging).unwrap();
-        let spec = manta_testkit::vectors::VectorSpec {
-            fs: 48_000.0,
-            duration_s: FIXTURE_SECONDS,
-            ..manta_testkit::vectors::v1()
-        };
-        manta_testkit::vectors::write_fixture_set(&spec, &staging).unwrap();
-        // Loser of a rename race: another process already published one.
-        if std::fs::rename(&staging, &root).is_err() {
-            let _ = std::fs::remove_dir_all(&staging);
-        }
-        assert!(
-            wav.exists(),
-            "fixture missing after publish: {}",
-            wav.display()
-        );
-        wav
-    })
-    .as_path()
-}
 
 fn spawn_listen() -> Child {
     Command::new(env!("CARGO_BIN_EXE_manta"))
@@ -97,19 +57,6 @@ fn await_ready(child: &mut Child) {
         }
     }
     panic!("manta exited before printing {READY_MARKER:?}");
-}
-
-fn wait_bounded(child: &mut Child, budget: Duration) -> Option<std::process::ExitStatus> {
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            return Some(status);
-        }
-        if start.elapsed() > budget {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }
 
 fn assert_signal_drains_and_exits_zero(sig: libc::c_int, name: &str) {
@@ -165,12 +112,10 @@ fn sigint_exits_zero_through_the_drain_path() {
 
 #[test]
 fn sighup_exits_zero_through_the_drain_path() {
-    // Not in MAN-85's Gherkin, but `ctrlc`'s `termination` feature is
-    // all-or-nothing: it registers SIGINT, SIGTERM *and* SIGHUP behind one
-    // signal-agnostic `FnMut()` closure. Pinning SIGHUP here makes that a
-    // deliberate, documented behaviour rather than an accident, and forces
-    // any future SIGHUP-triggered config reload (broad-review R-08 /
-    // MAN-30) to confront the fact that SIGHUP already means "shut down".
+    // Not in MAN-85's Gherkin. Since MAN-78, SIGHUP still drains and exits
+    // *without* a `[server]` table (a foreground run with no clients,
+    // history or uplink to protect, where a terminal hangup should end it);
+    // with one it reloads instead, which `config_reload.rs` pins.
     assert_signal_drains_and_exits_zero(libc::SIGHUP, "SIGHUP");
 }
 

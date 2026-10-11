@@ -255,6 +255,32 @@ Forwarding to an upstream RBN-style collector is a `[[rbn_uplink]]`
 block. `dry_run` defaults to `true`, so an uplink connects and logs in but
 transmits nothing until you set it to `false` deliberately.
 
+### Changing lists without a restart
+
+With a `[server]` table, `SIGHUP` makes a running daemon re-read its config
+file and apply the `[spot]` lists (`allowlist` and the `blocklist_path` and
+`notch_path` files) and each `[[rbn_uplink]]` block's `dry_run`. Connected
+clients, the `sh/dx` history and uplink connections stay up (MAN-78).
+
+```sh
+manta config check --config server.toml   # the same checks a reload runs
+kill -HUP "$(pidof manta)"               # systemd: systemctl reload manta
+# Docker: docker kill --signal=HUP <container>
+```
+
+The log reports `reload: applied` with the new list sizes, or
+`reload: rejected; still running the previous configuration` with the
+reason; a rejected reload changes nothing.
+Every other setting still needs a restart: a reload that finds one changed
+applies the lists anyway and names the setting in a warning.
+That includes `cty_path` and `scp_path`: a reload checks that those
+files still parse, but keeps the tables manta started with, so a new
+cty.dat or master.scp, even at the same path, needs a restart.
+Command-line `--allowlist`/`--blocklist`/`--notch` keep overriding the file. Without a
+`[server]` table, `SIGHUP` stops manta just as `SIGINT` and `SIGTERM` do.
+Windows has no `SIGHUP`, so no reload. During shutdown the daemon logs
+`SIGHUP ignored; the daemon is shutting down` at INFO and applies nothing.
+
 `bind_addr` has no loopback default — omit it and the telnet and JSON
 servers bind `0.0.0.0`, every interface, as a public cluster node expects.
 The example above pins `127.0.0.1` on purpose. Metrics is the exception:

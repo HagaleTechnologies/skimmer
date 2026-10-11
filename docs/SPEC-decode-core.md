@@ -996,6 +996,7 @@ freq_correction_ppm = 0.0
 # replay_epoch = 1700000000
 
 [spot]
+# allowlist, blocklist_path and notch_path are re-read on SIGHUP when the config has a [server] table (MAN-78); cty_path and scp_path need a restart.
 # Operator Watch List (§6, MAN-28): callsigns here bypass grammar/cty
 # validation and the repetition gate entirely in manta-spot's validator.
 # A non-empty --allowlist replaces this list.

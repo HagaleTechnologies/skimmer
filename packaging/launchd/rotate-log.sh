@@ -4,7 +4,7 @@
 # /usr/local/libexec/manta-rotate-log.sh; policy in packaging/README.md.
 # The log is overwritten through its own inode, never renamed or replaced:
 # manta keeps writing to the stdout/stderr launchd opened for it and does
-# not reopen them (SIGHUP shuts it down). Bytes manta writes between the
+# not reopen them (SIGHUP reloads its lists, MAN-78). Bytes manta writes between the
 # copy and the overwrite are lost. Silent on success; any failure exits
 # nonzero so `launchctl print` shows it.
 set -eu

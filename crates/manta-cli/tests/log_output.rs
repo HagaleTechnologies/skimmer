@@ -204,7 +204,9 @@ fn json_format_makes_every_stderr_line_a_json_object() {
     assert!(
         records
             .iter()
-            .any(|v| v["level"] == "INFO" && message(v) == READY),
+            // A prefix, not equality: with `[server]` the daemon reloads on
+            // SIGHUP and says so after this text (MAN-78).
+            .any(|v| v["level"] == "INFO" && message(v).starts_with(READY)),
         "no readiness record: {stderr}"
     );
     assert!(

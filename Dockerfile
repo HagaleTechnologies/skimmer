@@ -60,10 +60,12 @@ EXPOSE 7300 7301 7302
 # #78 until MAN-85, because manta-cli's `ctrlc` handler was registered for
 # SIGINT only and `docker stop`'s default SIGTERM killed the process
 # outright -- bypassing manta_engine::listen's cleanup, track finalization
-# and the server-drain sequence. MAN-85 enabled `ctrlc`'s `termination`
-# feature, so SIGINT, SIGTERM and SIGHUP now all drive the same drain
-# path; Docker's default stop signal is the correct one again, and
-# retargeting it would only hide whether that path still works.
+# and the server-drain sequence. Since MAN-85, SIGTERM and SIGINT drive the
+# same drain path (since MAN-78 through `signal-hook` for SIGTERM); Docker's
+# default stop signal is the correct one again, and retargeting it would
+# only hide whether that path still works. With a `[server]` table, SIGHUP
+# reloads the `[spot]` lists and each `[[rbn_uplink]]` `dry_run` instead of
+# stopping (MAN-78): `docker kill --signal=HUP <container>`.
 # `crates/manta-cli/tests/signal_shutdown.rs` keeps both halves honest.
 
 # `docker stop`'s own default grace period (10s on Linux) before SIGKILL

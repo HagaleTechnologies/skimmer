@@ -138,6 +138,15 @@ verify` must report no errors for the unit.
   made each time the service starts: after editing
   `/etc/manta/manta.toml`, run the `config check` line again, then
   `sudo systemctl restart manta`.
+- **Changing lists without a restart.** `sudo systemctl reload manta`
+  sends SIGHUP, which re-reads the `[spot]` lists and each
+  `[[rbn_uplink]]` `dry_run` while clients, the `sh/dx` history and
+  uplink connections stay up (MAN-78). It re-reads the start-time
+  credential copy of the config, so it picks up edits to the
+  `blocklist_path` and `notch_path` files, which the config names by
+  absolute path; an edit to `/etc/manta/manta.toml` itself still needs a
+  restart. `journalctl -u manta` shows `reload: applied` or
+  `reload: rejected` with the reason; a rejected reload changes nothing.
 - **Absolute paths.** manta resolves a relative path in the config against
   the config's directory, and at run time that is the credentials
   directory, not `/etc/manta`. Give `path` under `[input]`, and
@@ -234,8 +243,8 @@ each file.
   larger than 10 MiB, it keeps the final 1 MiB in place: it copies that
   tail to a temporary file in the same directory, overwrites the log with
   it, and removes the temporary file. The log keeps its inode because
-  manta never reopens its stdout and stderr, and SIGHUP shuts manta down
-  instead of reopening anything. A rename-based rotator such as newsyslog
+  manta never reopens its stdout and stderr, and SIGHUP reloads the
+  `[spot]` lists (MAN-78) instead of reopening anything. A rename-based rotator such as newsyslog
   would leave manta writing to the renamed file. Limits: the log can grow
   past 10 MiB between runs, or while the job cannot run, and lines manta
   writes during the copy can be lost. This is operational log retention,

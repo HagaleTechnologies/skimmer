@@ -34,6 +34,13 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# MAN-78: SIGTERM, and SIGHUP (reload with a [server] table, drain
+# without one); ctrlc keeps SIGINT and Windows' console events.
+[target.'cfg(unix)'.dependencies]
+signal-hook = { workspace = true }
+# MAN-78: `pthread_sigmask`, to keep a daemon's SIGHUP off the decode thread.
+libc = { workspace = true }
+
 [dev-dependencies]
 coppa-audio = { workspace = true }
 libc = { workspace = true }

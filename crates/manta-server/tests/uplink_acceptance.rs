@@ -254,6 +254,87 @@ async fn dry_run_logs_in_but_does_not_forward_the_spot_line() {
     let _ = harness.shutdown_tx.send(true);
 }
 
+/// MAN-78: a live reload flips `dry_run` through the shared flag; the
+/// next spot honours it on the same connection, with no reconnect.
+#[tokio::test]
+async fn dry_run_flag_flipped_while_connected_applies_to_the_next_spot_without_reconnecting() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let bus = Arc::new(SpotBus::new(SAMPLE_RATE_HZ, epoch, 0));
+    let metrics = Arc::new(Metrics::new());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let target = metrics.register_uplink_target(format!("127.0.0.1:{port}"), true);
+    let dry_run = Arc::new(AtomicBool::new(true));
+    // `config.dry_run` deliberately disagrees with the flag: once running,
+    // only the flag may be read.
+    let cfg = uplink_config(port, false);
+    tokio::spawn(manta_server::uplink::serve_with_live_dry_run(
+        cfg,
+        STATION_CALL.to_string(),
+        bus.clone(),
+        target.clone(),
+        dry_run.clone(),
+        shutdown_rx,
+    ));
+
+    let (login_line, mut reader, _wr) = mock_rbn_accept_and_login(&listener).await;
+    assert_eq!(login_line.trim_end(), STATION_CALL);
+
+    bus.publish(sample_spot());
+    let mut line = String::new();
+    let result =
+        tokio::time::timeout(Duration::from_millis(500), reader.read_line(&mut line)).await;
+    assert!(
+        result.is_err(),
+        "dry_run flag on: nothing may be sent, got {line:?}"
+    );
+    assert_eq!(target.suppressed_total(), 1);
+
+    dry_run.store(false, Ordering::Relaxed);
+    let spot = sample_spot();
+    let expected = rbn::format_line(
+        &spot,
+        STATION_CALL,
+        bus.unix_ts_for(spot.sample_ts),
+        rbn::LineFormat::Rbn,
+    );
+    bus.publish(spot);
+    tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+        .await
+        .expect("timed out waiting for the spot line after dry_run was turned off")
+        .unwrap();
+    assert_eq!(
+        line.trim_end(),
+        expected,
+        "must arrive on the same connection"
+    );
+
+    dry_run.store(true, Ordering::Relaxed);
+    bus.publish(sample_spot());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while target.suppressed_total() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the third spot was never suppressed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut more = String::new();
+    let result =
+        tokio::time::timeout(Duration::from_millis(300), reader.read_line(&mut more)).await;
+    assert!(
+        result.is_err(),
+        "dry_run back on: nothing more may be sent, got {more:?}"
+    );
+    assert_eq!(target.reconnects_total(), 0);
+    assert_eq!(metrics.uplink_sent_total(), 1);
+
+    let _ = shutdown_tx.send(true);
+}
+
 #[tokio::test]
 async fn dry_run_does_not_affect_other_bus_subscribers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

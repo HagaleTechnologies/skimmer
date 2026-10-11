@@ -12,6 +12,7 @@ use crate::config::{RbnUplinkConfig, UplinkSpotTypes};
 use crate::metrics::UplinkTarget;
 use crate::rate_limit::RateLimiter;
 use crate::rbn;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -89,11 +90,30 @@ pub fn target_labels(configs: &[RbnUplinkConfig]) -> Vec<String> {
 /// a dropped connection must not permanently silence the uplink, since
 /// that would defeat MAN-32's purpose of manta staying a live RBN
 /// contributor.
+///
+/// `dry_run` is fixed at `config.dry_run` for the task's life; see
+/// `serve_with_live_dry_run` for a flag a live reload can change.
 pub async fn serve(
     config: RbnUplinkConfig,
     station_callsign: String,
     bus: Arc<SpotBus>,
     target: Arc<UplinkTarget>,
+    shutdown: watch::Receiver<bool>,
+) {
+    let dry_run = Arc::new(AtomicBool::new(config.dry_run));
+    serve_with_live_dry_run(config, station_callsign, bus, target, dry_run, shutdown).await;
+}
+
+/// `serve`, reading `dry_run` from a shared flag on every forwarded spot
+/// instead of `config.dry_run` (MAN-78): a live config reload flips it
+/// without reconnecting or logging in again. Once running, only the flag
+/// is read, never `config.dry_run`.
+pub async fn serve_with_live_dry_run(
+    config: RbnUplinkConfig,
+    station_callsign: String,
+    bus: Arc<SpotBus>,
+    target: Arc<UplinkTarget>,
+    dry_run: Arc<AtomicBool>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     if !config.enabled {
@@ -108,7 +128,7 @@ pub async fn serve(
     // field and `start_spot_server` spawns one `serve` task per entry.
     // Goes through `tracing` (stderr, see `main.rs`'s subscriber setup)
     // so it can never interleave with `--json` spot output on stdout.
-    if config.dry_run {
+    if dry_run.load(Ordering::Relaxed) {
         tracing::info!(
             target_host = %config.target_host,
             target_port = config.target_port,
@@ -149,6 +169,7 @@ pub async fn serve(
 
         match connect_and_forward(
             &config,
+            &dry_run,
             &login_callsign,
             &bus,
             &target,
@@ -329,6 +350,7 @@ where
 
 async fn connect_and_forward(
     config: &RbnUplinkConfig,
+    dry_run: &AtomicBool,
     login_callsign: &str,
     bus: &Arc<SpotBus>,
     target: &Arc<UplinkTarget>,
@@ -417,7 +439,7 @@ async fn connect_and_forward(
         &mut reader,
         &mut wr,
         &mut rx,
-        config,
+        dry_run,
         config.spot_types,
         login_callsign,
         bus,
@@ -525,7 +547,7 @@ async fn forward_loop(
     reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
     wr: &mut tokio::net::tcp::OwnedWriteHalf,
     rx: &mut broadcast::Receiver<crate::bus::BusSpot>,
-    config: &RbnUplinkConfig,
+    dry_run: &AtomicBool,
     spot_types: UplinkSpotTypes,
     spotter_call: &str,
     bus: &Arc<SpotBus>,
@@ -550,7 +572,7 @@ async fn forward_loop(
                             target.record_suppressed();
                             continue;
                         }
-                        if config.dry_run {
+                        if dry_run.load(Ordering::Relaxed) {
                             target.record_suppressed();
                             continue;
                         }

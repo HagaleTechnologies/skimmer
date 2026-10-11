@@ -105,7 +105,13 @@ pub(crate) fn init(out: &Path, force: bool) -> Result<()> {
 /// misconfiguration -- a `<...>` placeholder string anywhere, or the
 /// example callsign as the station or uplink login.
 fn reject_placeholders(loaded: &Loaded) -> Result<()> {
-    if let Some((key, value)) = find_placeholder(&loaded.raw, "") {
+    reject_placeholders_in(loaded, &loaded.raw)
+}
+
+/// `reject_placeholders`, scanning `raw` (`loaded.raw` or part of it) for
+/// `<...>` strings.
+fn reject_placeholders_in(loaded: &Loaded, raw: &toml::Table) -> Result<()> {
+    if let Some((key, value)) = find_placeholder(raw, "") {
         // Never echo a secret, even one shaped like a placeholder (D5).
         if key.ends_with("password") {
             bail!(
@@ -119,6 +125,23 @@ fn reject_placeholders(loaded: &Loaded) -> Result<()> {
         );
     }
     reject_example_callsigns(loaded)
+}
+
+/// MAN-78: the checks `check` runs beyond `run`'s config stage
+/// (placeholders, example callsigns, duplicate ports), for a SIGHUP
+/// reload: a document they reject applies nothing. With `cli_source` (the
+/// daemon's command line names the source) `[input]` is not scanned for
+/// placeholders: that flag replaced it, so `run` never reads it (MAN-268
+/// D3).
+pub(crate) fn reject_on_reload(loaded: &Loaded, cli_source: bool) -> Result<()> {
+    if cli_source {
+        let mut raw = loaded.raw.clone();
+        raw.remove("input");
+        reject_placeholders_in(loaded, &raw)?;
+    } else {
+        reject_placeholders(loaded)?;
+    }
+    reject_duplicate_ports(loaded)
 }
 
 /// MAN-268: the callsign half of `reject_placeholders`, which `run` (and

@@ -16,6 +16,14 @@
 # a daemon that is still draining. systemd's default SIGTERM is the right
 # stop signal; do not override it. See
 # docs/DECISIONS/2026-10-10-man268-unattended-packaging.md.
+#
+# ExecReload= sends SIGHUP: `systemctl reload manta` re-reads the [spot]
+# lists and each [[rbn_uplink]] dry_run without dropping clients (MAN-78).
+# systemd copies the config into the credentials directory when the service
+# starts, so a reload re-reads that start-time copy: it picks up edits to
+# the list files (absolute paths), but an edit to /etc/manta/manta.toml
+# itself needs `systemctl restart manta`. See
+# docs/DECISIONS/2026-10-10-man78-live-reload.md.
 
 [Unit]
 Description=manta wideband CW skimmer
@@ -28,6 +36,7 @@ Type=simple
 DynamicUser=yes
 LoadCredential=manta.toml:/etc/manta/manta.toml
 ExecStart=/usr/local/bin/manta run --config ${CREDENTIALS_DIRECTORY}/manta.toml
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
 TimeoutStopSec=60

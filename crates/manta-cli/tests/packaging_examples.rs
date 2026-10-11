@@ -665,6 +665,12 @@ fn systemd_unit_runs_the_credential_config_and_outlasts_the_drain() {
         "ExecStart's --config must be the loaded credential"
     );
     assert_eq!(source, "/etc/manta/manta.toml");
+    // MAN-78: `systemctl reload manta` is a SIGHUP, which a `[server]`
+    // daemon answers by re-reading its [spot] lists and dry_run.
+    assert_eq!(
+        service("ExecReload").as_deref(),
+        Some("/bin/kill -HUP $MAINPID")
+    );
 
     assert_eq!(service("Type").as_deref(), Some("simple"));
     assert_eq!(service("DynamicUser").as_deref(), Some("yes"));
