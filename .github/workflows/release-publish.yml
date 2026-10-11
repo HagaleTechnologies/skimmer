@@ -78,8 +78,7 @@ permissions:
 
 jobs:
   # MAN-65 finding 1: fail an unpublishable tag in SECONDS, before five
-  # platform builds burn -- and before Buildx rejects it 30 minutes in and
-  # takes the `release` job (needs: docker-publish-release) down with it.
+  # platform builds burn -- and before Buildx rejects it 30 minutes in.
   # This job is also now the single place the version and image name are
   # derived; `build` and both Docker jobs consume its outputs instead of
   # each re-deriving them.
@@ -268,6 +267,7 @@ jobs:
   # Separate environments preserve production's tag-only policy while allowing
   # deliberate manual builds on branches or tags. Both require owner approval;
   # naming the environments here does not configure their protection rules.
+  # `release` (MAN-298) also runs in ghcr-publish, beside this job.
   docker-publish-release:
     needs: [validate-tag, build]
     if: github.event_name == 'push'
@@ -552,10 +552,16 @@ jobs:
   # build legs run dependency build scripts and `cross` containers, and keeping
   # id-token: write out of them limits who can mint a signing token. See
   # docs/DECISIONS/2026-10-10-man80-release-checksums-attestation.md.
+  #
+  # MAN-298: the Release does not wait for the image. It shares docker-publish-release's
+  # owner approval (ghcr-publish) but not its outcome, so a failed or re-run image publish
+  # neither skips nor repeats it. A rejected approval still publishes nothing.
+  # See docs/DECISIONS/2026-10-11-man298-first-release.md.
   release:
-    needs: [build, docker-publish-release]
+    needs: [validate-tag, build]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment: ghcr-publish
     # id-token + attestations: the Sigstore signing certificate and the attestation
     # upload. No artifact-metadata: write -- storage records are a push-to-registry
     # feature, and this job pushes nothing to a registry.

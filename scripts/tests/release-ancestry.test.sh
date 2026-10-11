@@ -170,13 +170,16 @@ for job in docker-publish-release publish-latest release; do
   case "$job" in
     docker-publish-release) dependency='    needs: [validate-tag, build]' ;;
     publish-latest) dependency='    needs: [validate-tag, docker-publish-release]' ;;
-    release) dependency='    needs: [build, docker-publish-release]' ;;
+    # MAN-298: the GitHub Release waits for the owner's approval, not for the image.
+    release) dependency='    needs: [validate-tag, build]' ;;
   esac
   require "$block" "$dependency" "$job: dependency chain changed"
-  if [ "$job" != release ]; then
-    require "$block" '    environment: ghcr-publish' "$job: missing production approval environment"
-  fi
+  require "$block" '    environment: ghcr-publish' "$job: missing production approval environment"
 done
+# MAN-298: a failed or re-run image publish must neither skip nor re-run the GitHub Release.
+if sed '/^[[:space:]]*#/d' <<< "$(job_block "$publish_path" release)" | grep -q 'docker-publish-release'; then
+  fail 'release: must not depend on docker-publish-release'
+fi
 require "$(cat "$REPO_ROOT/.github/workflows/ci-full.yml")" '        run: bash scripts/tests/release-ancestry.test.sh' 'CI must run ancestry suite'
 
 if [ "$failures" -ne 0 ]; then
