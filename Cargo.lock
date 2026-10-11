@@ -857,6 +857,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tungstenite",
+ "windows-sys",
 ]
 
 [[package]]

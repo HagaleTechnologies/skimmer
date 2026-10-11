@@ -325,16 +325,17 @@ fn is_audio(spec: &LiveSourceSpec) -> bool {
 pub(crate) fn run(args: CalibrateArgs) -> Result<()> {
     let duration = Duration::from_secs(args.duration_secs);
     check_duration(duration)?;
-    let opts = CalibrateOptions {
-        duration,
-        search_ppm: args.search_ppm,
-        reference_hz: args.reference_hz,
-    };
     let SourcePrepared {
         config_path,
         loaded,
         mut resolved,
     } = prepare_source(args.cli, args.config)?;
+    let opts = CalibrateOptions {
+        duration,
+        search_ppm: args.search_ppm,
+        reference_hz: args.reference_hz,
+        live: !matches!(resolved.spec, LiveSourceSpec::File { .. }),
+    };
     let replaced_by = match (resolved.replaced_file_source, config_path.as_deref()) {
         (Some(flag), _) => Some(flag),
         (None, Some(path)) => {

@@ -112,6 +112,12 @@ pub struct CalibrateOptions {
     pub search_ppm: f64,
     /// Measure only this carrier, instead of the catalogue.
     pub reference_hz: Option<f64>,
+    /// The source is a live receiver: reading stops after the first read
+    /// that returns more than `duration` plus 10 s of wall clock after the
+    /// start, so a receiver that slows down cannot hold the run open. A
+    /// recording (`false`) is read to its sample count however long that
+    /// takes, so its report depends only on its samples.
+    pub live: bool,
 }
 
 impl Default for CalibrateOptions {
@@ -120,6 +126,7 @@ impl Default for CalibrateOptions {
             duration: DEFAULT_DURATION,
             search_ppm: DEFAULT_SEARCH_PPM,
             reference_hz: None,
+            live: true,
         }
     }
 }
@@ -434,9 +441,19 @@ fn median(values: &[f64]) -> f64 {
 
 /// Read up to `opts.duration` of `src` and measure every planned reference.
 pub fn calibrate(
+    src: Box<dyn IqSource>,
+    planned: &[PlannedReference],
+    opts: &CalibrateOptions,
+) -> Result<CalibrationReport> {
+    let started = Instant::now();
+    calibrate_with_clock(src, planned, opts, || started.elapsed())
+}
+
+fn calibrate_with_clock(
     mut src: Box<dyn IqSource>,
     planned: &[PlannedReference],
     opts: &CalibrateOptions,
+    mut elapsed: impl FnMut() -> Duration,
 ) -> Result<CalibrationReport> {
     check_duration(opts.duration)?;
     check_options(opts)?;
@@ -453,7 +470,7 @@ pub fn calibrate(
         .map_err(|e| anyhow!("cannot measure this reference on this source: {e}"))?;
 
     let max_samples = (fs * opts.duration.as_secs_f64()).round().max(0.0) as u64;
-    let deadline = Instant::now() + opts.duration + STALL_GRACE;
+    let deadline = opts.duration + STALL_GRACE;
     let mut buf = vec![Complex32::new(0.0, 0.0); READ_CHUNK];
     let mut consumed: u64 = 0;
     while consumed < max_samples {
@@ -473,7 +490,7 @@ pub fn calibrate(
             e.push(&buf[..n]);
         }
         consumed += n as u64;
-        if Instant::now() > deadline {
+        if opts.live && elapsed() > deadline {
             break;
         }
     }
@@ -1009,6 +1026,24 @@ mod tests {
             report.duration_s
         );
         assert!(t0.elapsed() < Duration::from_secs(60));
+    }
+
+    #[test]
+    fn only_a_live_source_is_cut_by_the_wall_clock() {
+        let s = with_noise(carrier(PPM_2_5_HZ, CENTRE, 12.0, |_| 1.0), 10);
+        let planned = only(10e6, ReferenceKind::TimeStandard);
+        // A host so slow that the stall deadline has passed after every read.
+        let late = || Duration::from_secs(3600);
+        let recording = CalibrateOptions {
+            live: false,
+            ..opts(12)
+        };
+        let replayed =
+            calibrate_with_clock(source(s.clone(), CENTRE), &planned, &recording, late).unwrap();
+        assert_eq!(replayed.duration_s, 12.0);
+        assert_eq!(replayed.references[0].status, ReferenceStatus::Measured);
+        let live = calibrate_with_clock(source(s, CENTRE), &planned, &opts(12), late).unwrap();
+        assert_eq!(live.duration_s, READ_CHUNK as f64 / FS);
     }
 
     #[test]

@@ -110,18 +110,23 @@ adding to it.
      config file.
 10. **Safe edit.** `config_edit.rs` uses `toml_edit` 0.25, already in the
     lock graph through `proc-macro-crate`, so `Cargo.lock` gains only two
-    dependency-list lines. Every other byte is preserved: comments, order,
-    and an existing value's trailing comment, whose decor is copied because
-    a plain assignment drops it. A missing `[input]` is appended; an inline
-    `input = { ... }` or dotted `input.*` keys are edited in their own style;
-    a UTF-8 BOM is re-prepended. The file is replaced atomically:
-    canonicalize, so a symlinked config is edited at its target and the link
-    stays a link; write a `create_new` temp file in the same directory and
-    `sync_all` it; copy the mode; on Unix, `chown` to the original uid and
-    gid when they differ; validate the temp file with `config::load`; then
-    rename it over the target. If the owner cannot be kept, the save fails
-    and names the value to set by hand. A drop guard removes the temp file
-    on every error path, and an invalid file is left byte-identical.
+    dependency-list lines, plus a third for the Windows-only `windows-sys`
+    0.61 that `manta-engine` already uses. Every other byte is preserved:
+    comments, order, and an existing value's trailing comment, whose decor
+    is copied because a plain assignment drops it. A missing `[input]` is
+    appended; an inline `input = { ... }` or dotted `input.*` keys are
+    edited in their own style; a UTF-8 BOM is re-prepended. The file is
+    replaced atomically: canonicalize, so a symlinked config is edited at
+    its target and the link stays a link; write a `create_new` temp file in
+    the same directory (owner-only on Unix; on Windows, opened unshared and
+    given the original's DACL before anything is written, because a new file
+    takes the directory's ACL) and `sync_all` it; copy the mode; on Unix,
+    `chown` to the original uid and gid when they differ; validate the temp
+    file with `config::load`; then rename it over the target. If the Unix
+    owner or the Windows DACL cannot be kept, the save fails and names the
+    value to set by hand. (Windows keeps the DACL, not the owner: the saved
+    file belongs to whoever ran calibrate.) A drop guard removes the temp
+    file on every error path, and an invalid file is left byte-identical.
 11. **Refusals before I/O.** These are refused before any receiver is
     opened, with exit 1: `--duration` outside 10 to 3600 s; `--tune-hz` on a
     sound card or recording; an audio or file source with no

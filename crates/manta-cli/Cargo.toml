@@ -35,6 +35,17 @@ toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# MAN-127: config_edit.rs copies the config's DACL onto the temp file it
+# replaces the config with; std's set_permissions carries only the
+# read-only attribute on Windows.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+] }
+
 [dev-dependencies]
 coppa-audio = { workspace = true }
 libc = { workspace = true }

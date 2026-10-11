@@ -130,6 +130,14 @@ pub(crate) fn save_freq_correction_ppm(path: &Path, ppm: f64) -> Result<Option<f
     // umask-default temp file would expose them to other local users.
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    // WRITE_DAC, so keep_dacl can give the file the original's DACL, and no
+    // sharing, so no one else opens it while it has the directory's.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{Foundation::GENERIC_WRITE, Storage::FileSystem::WRITE_DAC};
+        options.access_mode(GENERIC_WRITE | WRITE_DAC).share_mode(0);
+    }
     let mut file = options
         .open(&temp)
         .with_context(|| format!("creating temp file {}", temp.display()))?;
@@ -137,6 +145,8 @@ pub(crate) fn save_freq_correction_ppm(path: &Path, ppm: f64) -> Result<Option<f
         path: temp.clone(),
         armed: true,
     };
+    #[cfg(windows)]
+    keep_dacl(&target, &file, ppm)?;
     file.write_all(new_text.as_bytes())
         .and_then(|()| file.sync_all())
         .with_context(|| format!("writing temp file {}", temp.display()))?;
@@ -187,6 +197,84 @@ fn keep_owner(target: &Path, meta: &fs::Metadata, temp: &Path, ppm: f64) -> Resu
             literal(ppm)
         )
     })
+}
+
+/// Gives the still-empty temp file the original's DACL. On Windows a new
+/// file takes its directory's inheritable ACL, which can be broader than
+/// the config's own, and `set_permissions` carries only the read-only
+/// attribute. A DACL that inherits keeps inheriting, from the same
+/// directory; a protected one is copied as it is.
+#[cfg(windows)]
+fn keep_dacl(target: &Path, temp: &fs::File, ppm: f64) -> Result<()> {
+    use std::io::Error;
+    use std::os::windows::io::AsRawHandle;
+    use std::ptr::{null, null_mut};
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+    use windows_sys::Win32::Security::Authorization::{
+        GetSecurityInfo, SetSecurityInfo, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{
+        GetSecurityDescriptorControl, ACL, DACL_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+        UNPROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    let fail = |e: Error| {
+        anyhow!(
+            "cannot keep {}'s permissions: {e}; set {KEY} = {} by hand",
+            target.display(),
+            literal(ppm)
+        )
+    };
+    let original = fs::File::open(target).map_err(fail)?;
+    let mut dacl: *mut ACL = null_mut();
+    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: a live handle and out-pointers to locals. On success `sd` is
+    // a LocalAlloc'd descriptor that `dacl` points into.
+    let err = unsafe {
+        GetSecurityInfo(
+            original.as_raw_handle(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut sd,
+        )
+    };
+    if err != ERROR_SUCCESS {
+        return Err(fail(Error::from_raw_os_error(err as i32)));
+    }
+    let (mut control, mut revision) = (0u16, 0u32);
+    // SAFETY: `sd` is the descriptor GetSecurityInfo returned, and `dacl`
+    // stays valid until `sd` is freed, below; `temp` is a live handle
+    // opened with WRITE_DAC.
+    let result = unsafe {
+        if GetSecurityDescriptorControl(sd, &mut control, &mut revision) == 0 {
+            Err(Error::last_os_error())
+        } else {
+            let inheritance = if control & SE_DACL_PROTECTED != 0 {
+                PROTECTED_DACL_SECURITY_INFORMATION
+            } else {
+                UNPROTECTED_DACL_SECURITY_INFORMATION
+            };
+            match SetSecurityInfo(
+                temp.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | inheritance,
+                null_mut(),
+                null_mut(),
+                dacl,
+                null(),
+            ) {
+                ERROR_SUCCESS => Ok(()),
+                e => Err(Error::from_raw_os_error(e as i32)),
+            }
+        }
+    };
+    // SAFETY: `sd` came from GetSecurityInfo and is freed once.
+    unsafe { LocalFree(sd) };
+    result.map_err(fail)
 }
 
 #[cfg(test)]
@@ -376,5 +464,89 @@ mod tests {
         );
         assert_eq!(entries(&real_dir), ["manta.toml"]);
         assert_eq!(entries(dir.path()), ["link.toml", "real"]);
+    }
+
+    /// Whether `path`'s DACL is protected from inheritance, after making it
+    /// so when `protect`.
+    #[cfg(windows)]
+    fn dacl_protected(path: &Path, protect: bool) -> bool {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use std::ptr::{null, null_mut};
+        use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+        use windows_sys::Win32::Security::Authorization::{
+            GetSecurityInfo, SetSecurityInfo, SE_FILE_OBJECT,
+        };
+        use windows_sys::Win32::Security::{
+            GetSecurityDescriptorControl, ACL, DACL_SECURITY_INFORMATION,
+            PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{READ_CONTROL, WRITE_DAC};
+        let f = OpenOptions::new()
+            .access_mode(READ_CONTROL | WRITE_DAC)
+            .open(path)
+            .unwrap();
+        let mut dacl: *mut ACL = null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        let (mut control, mut revision) = (0u16, 0u32);
+        // SAFETY: a live handle opened with READ_CONTROL and WRITE_DAC,
+        // out-pointers to locals, and `sd` freed once after its last use.
+        unsafe {
+            let h = f.as_raw_handle();
+            let info = DACL_SECURITY_INFORMATION;
+            assert_eq!(
+                GetSecurityInfo(
+                    h,
+                    SE_FILE_OBJECT,
+                    info,
+                    null_mut(),
+                    null_mut(),
+                    &mut dacl,
+                    null_mut(),
+                    &mut sd
+                ),
+                ERROR_SUCCESS
+            );
+            if protect {
+                let info = info | PROTECTED_DACL_SECURITY_INFORMATION;
+                assert_eq!(
+                    SetSecurityInfo(
+                        h,
+                        SE_FILE_OBJECT,
+                        info,
+                        null_mut(),
+                        null_mut(),
+                        dacl,
+                        null()
+                    ),
+                    ERROR_SUCCESS
+                );
+            }
+            assert_ne!(
+                GetSecurityDescriptorControl(sd, &mut control, &mut revision),
+                0
+            );
+            LocalFree(sd);
+        }
+        protect || control & SE_DACL_PROTECTED != 0
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn save_keeps_a_protected_dacl() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write(dir.path(), "manta.toml", "[input]\n");
+        dacl_protected(&p, true);
+        assert!(dacl_protected(&p, false));
+        save_freq_correction_ppm(&p, -1.42).unwrap();
+        assert!(
+            dacl_protected(&p, false),
+            "the saved config took the directory's inherited ACL"
+        );
+        // An inheriting DACL stays inheriting.
+        let q = write(dir.path(), "other.toml", "[input]\n");
+        assert!(!dacl_protected(&q, false));
+        save_freq_correction_ppm(&q, -1.42).unwrap();
+        assert!(!dacl_protected(&q, false));
     }
 }
