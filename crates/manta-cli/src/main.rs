@@ -13,11 +13,8 @@ mod build_info;
 mod clock_check;
 mod config;
 mod config_cmd;
-<<<<<<< HEAD
-mod doctor_checks;
-=======
 mod devices;
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
+mod doctor_checks;
 mod reconnect;
 mod source_check;
 mod text_lines;

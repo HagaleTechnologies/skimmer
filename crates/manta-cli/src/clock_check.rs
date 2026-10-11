@@ -9,6 +9,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) const DEFAULT_NTP_SERVER: &str = "pool.ntp.org";
 pub(crate) const NTP_BUDGET: Duration = Duration::from_secs(3);
+/// The shortest wait for one of a server's addresses: a satellite link's
+/// round trip, with room to spare.
+const NTP_ATTEMPT_MIN: Duration = Duration::from_secs(1);
 /// Far outside the error any working NTP client allows.
 pub(crate) const WARN_OFFSET_S: f64 = 1.0;
 /// The RBN spot line's one-minute time resolution: past it, every spot
@@ -150,11 +153,10 @@ pub(crate) fn fmt_budget(d: Duration) -> String {
     }
 }
 
-/// One SNTP exchange with `server`, trying each of its addresses while the
-/// budget lasts. The offset is positive when this clock is behind.
+/// One SNTP exchange with `server`, trying each of its addresses within
+/// the budget. The offset is positive when this clock is behind.
 pub(crate) fn query(server: &NtpServer, budget: Duration) -> Result<f64, String> {
     let deadline = Instant::now() + budget;
-    let timed_out = || format!("did not answer within {}", fmt_budget(budget));
     let addrs: Vec<SocketAddr> = (server.host.as_str(), server.port)
         .to_socket_addrs()
         .map_err(|e| format!("could not be looked up ({e})"))?
@@ -162,13 +164,24 @@ pub(crate) fn query(server: &NtpServer, budget: Duration) -> Result<f64, String>
     if addrs.is_empty() {
         return Err("could not be looked up (no addresses)".to_string());
     }
+    query_addrs(&addrs, budget, deadline)
+}
+
+/// Tries `addrs` in order until one answers or `deadline` passes. Each
+/// address gets an even share of what is left, but at least
+/// `NTP_ATTEMPT_MIN`: a silent address cannot spend the time the ones after
+/// it need, and a slow link still has time to answer.
+fn query_addrs(addrs: &[SocketAddr], budget: Duration, deadline: Instant) -> Result<f64, String> {
+    let timed_out = || format!("did not answer within {}", fmt_budget(budget));
     let mut last = None;
-    for addr in addrs {
+    for (i, addr) in addrs.iter().enumerate() {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
         }
-        match query_addr(addr, remaining) {
+        let left = u32::try_from(addrs.len() - i).unwrap_or(u32::MAX);
+        let attempt = (remaining / left).max(NTP_ATTEMPT_MIN).min(remaining);
+        match query_addr(*addr, attempt) {
             Ok(offset) => return Ok(offset),
             Err(Some(e)) => last = Some(e),
             Err(None) => last = Some(timed_out()),
@@ -546,6 +559,12 @@ mod tests {
 
     /// A fake SNTP server on loopback whose clock runs `ahead_s` fast.
     fn fake_server(ahead_s: f64) -> (UdpSocket, NtpServer) {
+        fake_server_after(ahead_s, Duration::ZERO)
+    }
+
+    /// As `fake_server`, but each reply leaves `delay` after the request
+    /// arrives, like a server on a slow link.
+    fn fake_server_after(ahead_s: f64, delay: Duration) -> (UdpSocket, NtpServer) {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let port = sock.local_addr().unwrap().port();
         let answer = sock.try_clone().unwrap();
@@ -555,10 +574,12 @@ mod tests {
                 if n < PACKET_LEN {
                     continue;
                 }
-                let now = unix_seconds(SystemTime::now()) + ahead_s;
+                let t1 = unix_seconds(SystemTime::now()) + ahead_s;
+                std::thread::sleep(delay);
+                let t2 = unix_seconds(SystemTime::now()) + ahead_s;
                 let mut originate = [0u8; 8];
                 originate.copy_from_slice(&buf[40..48]);
-                let p = reply(0, 4, 1, originate, now, now);
+                let p = reply(0, 4, 1, originate, t1, t2);
                 let _ = answer.send_to(&p, from);
             }
         });
@@ -589,6 +610,26 @@ mod tests {
         let err = query(&server, Duration::from_millis(300)).unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(1), "{err}");
         assert_eq!(err, "did not answer within 0.3 s");
+    }
+
+    #[test]
+    fn query_tries_a_later_address_after_a_silent_first_one() {
+        let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (_sock, server) = fake_server(30.0);
+        let answering: SocketAddr = (Ipv4Addr::LOCALHOST, server.port).into();
+        let addrs = [silent.local_addr().unwrap(), answering];
+        let budget = Duration::from_secs(2);
+        let got = query_addrs(&addrs, budget, Instant::now() + budget).unwrap();
+        assert!((29.5..=30.5).contains(&got), "{got}");
+    }
+
+    #[test]
+    fn query_gives_a_slow_first_address_time_to_answer() {
+        let (_sock, server) = fake_server_after(30.0, Duration::from_millis(600));
+        let slow: SocketAddr = (Ipv4Addr::LOCALHOST, server.port).into();
+        let budget = Duration::from_secs(2);
+        let got = query_addrs(&[slow; 4], budget, Instant::now() + budget).unwrap();
+        assert!((29.5..=30.5).contains(&got), "{got}");
     }
 
     #[cfg(target_os = "linux")]
