@@ -1182,7 +1182,9 @@ fn audio_silence_warning(device: &str) -> String {
 }
 
 /// MAN-131: `decode`'s analogue of `warn_if_audio_source_has_no_rf_reference`.
-/// `sidecar_center_hz` is `None` when `<stem>.json` does not exist.
+/// `sidecar_center_hz` is `None` when `<stem>.json` does not exist. When this
+/// returns `Some`, the `Decode` handler decodes at a 0.0 centre, so a
+/// negative sidecar value cannot contradict the warning.
 fn recording_center_warning(wav: &Path, sidecar_center_hz: Option<f64>) -> Option<String> {
     let sidecar = manta_input::sidecar_path(wav);
     let why = match sidecar_center_hz {
@@ -3660,12 +3662,16 @@ fn main() -> Result<()> {
             // MAN-131: say so before decoding when the reported frequencies
             // will be baseband offsets. Only for an existing file, so a
             // missing WAV still fails with just its `open WAV` error.
+            let mut center_freq_hz = center_freq_hz;
             if center_freq_hz.is_none() && path.is_file() {
                 let sidecar = manta_input::read_sidecar(&path)?;
                 if let Some(warning) =
                     recording_center_warning(&path, sidecar.map(|sc| sc.center_freq_hz))
                 {
                     eprintln!("{warning}");
+                    // Keep the warning true: a negative sidecar centre
+                    // decodes at 0.0, not shifted by itself.
+                    center_freq_hz = Some(0.0);
                 }
             }
             let report = decode_wav(&path, center_freq_hz, &cfg)?;

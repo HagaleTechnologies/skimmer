@@ -89,6 +89,35 @@ fn decode_with_a_zero_center_sidecar_warns() {
 }
 
 #[test]
+fn decode_with_a_negative_center_sidecar_reports_baseband_offsets() {
+    // PR #246 Codex finding: the warning promises baseband offsets, so a
+    // negative sidecar centre must not shift every frequency by itself.
+    let dir = tempfile::tempdir().unwrap();
+    let wav = v1_fixture(dir.path());
+    let copy = dir.path().join("copy.wav");
+    std::fs::copy(&wav, &copy).unwrap();
+    std::fs::write(
+        dir.path().join("v1.json"),
+        r#"{"center_freq_hz": -14000000.0}"#,
+    )
+    .unwrap();
+
+    let negative = decode(&["--json", wav.to_str().unwrap()]);
+    let no_sidecar = decode(&["--json", copy.to_str().unwrap()]);
+    let stderr = stderr_of(&negative);
+    assert!(negative.status.success(), "{stderr}");
+    assert!(no_sidecar.status.success(), "{}", stderr_of(&no_sidecar));
+    assert!(stderr.contains("center_freq_hz = -14000000"), "{stderr}");
+    assert!(stderr.contains("baseband offsets"), "{stderr}");
+    let freq_hz = report_freq_hz(&negative);
+    assert!((0.0..100_000.0).contains(&freq_hz), "freq_hz {freq_hz}");
+    assert_eq!(
+        negative.stdout, no_sidecar.stdout,
+        "a negative sidecar centre must decode exactly as no sidecar does"
+    );
+}
+
+#[test]
 fn center_freq_hz_reproduces_the_sidecar_decode_byte_for_byte() {
     let dir = tempfile::tempdir().unwrap();
     let wav = v1_fixture(dir.path());

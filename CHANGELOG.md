@@ -26,8 +26,8 @@ git history and `docs/DECISIONS/`.
 - `manta decode --center-freq-hz HZ` sets the recording's RF centre
   frequency, overriding its `<name>.json` sidecar. Without the flag, a
   recording with no sidecar (or a sidecar whose `center_freq_hz` is not
-  positive) gets a warning that its frequencies are baseband offsets
-  (MAN-131).
+  positive) gets a warning that its frequencies are baseband offsets,
+  and is decoded at a 0.0 centre (MAN-131).
 
 ### Changed
 

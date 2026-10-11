@@ -96,7 +96,10 @@ settings for a manta bug.
   validated like `--dial-freq-hz` (finite and positive; clap exits 2
   otherwise). With the flag the sidecar is not read at all
   (`WavIqSource::open_with_center_freq_hz`), so a malformed or foreign
-  `<stem>.json` cannot fail the decode. `decode --json` stdout is unchanged without the flag, and
+  `<stem>.json` cannot fail the decode. A warned decode runs at a 0.0
+  centre, so a negative sidecar value no longer shifts every frequency
+  below zero (PR #246 Codex finding). Otherwise `decode --json` stdout
+  is unchanged without the flag, and
   `--center-freq-hz 14000000` on a sidecar-less copy reproduces the 14 MHz
   sidecar decode byte for byte. A missing WAV still fails with just its
   `open WAV` error. Scope is `decode` only: not `oracle`, and not
