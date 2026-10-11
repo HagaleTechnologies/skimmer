@@ -107,6 +107,7 @@ Per hop, for a track with peak channel `k₀`:
 With ≥ 100 key-down hops (any real CW transmission) the estimator's standard
 error is ≪ 10 Hz; absolute accuracy is then bounded by the SDR's reference
 oscillator, which is out of scope (config `input.freq_correction_ppm` exists).
+`manta calibrate` measures it against a known carrier.
 This ≪ 10 Hz claim is empirically channel-table-size (N) dependent: it was
 measured at N = 1024 (the 96 kHz table V1 uses); V31's 48 kHz/N = 512 table
 measures ~17 Hz instead (see the V31 row below; tracked in issue #177).
@@ -1076,9 +1077,9 @@ addresses, per-IP connection and command budgets) are deployment settings
 rather than normative constants of this spec, and
 `crates/manta-server/src/config.rs` is their reference.
 
-**Precedence and the environment.** `run`, `soak` and `doctor` resolve
-every key as: command-line flag, then `MANTA_<TABLE>_<KEY>` environment
-variable (`MANTA_INPUT_FREQ_CORRECTION_PPM` is `input.freq_correction_ppm`;
+**Precedence and the environment.** `run`, `soak`, `doctor` and
+`calibrate` resolve every key as: command-line flag, then
+`MANTA_<TABLE>_<KEY>` environment variable (`MANTA_INPUT_FREQ_CORRECTION_PPM` is `input.freq_correction_ppm`;
 `<TABLE>` is one of `SERVER`, `INPUT`, `SPOT`, `DETECTOR`, `DECODE`), then
 the config file, then the default above. `--config` names the file;
 without it they read `MANTA_CONFIG`. An environment value is parsed as a
@@ -1093,7 +1094,10 @@ always taken verbatim: `server.station_callsign`, `server.bind_addr`,
 `decode.engine`. Relative paths from the file
 resolve against the file's directory; those from a flag or the
 environment resolve against the working directory. `[[rbn_uplink]]`
-cannot be set from the environment.
+cannot be set from the environment. `calibrate` is the only command that
+edits an existing config file, and it writes only `input.freq_correction_ppm`, after
+confirmation (MAN-127,
+`docs/DECISIONS/2026-10-11-man127-calibrate-command.md`).
 
 Unknown tables, unknown keys in a known table, and unknown `MANTA_*`
 variables are errors that name the offender, raised before any source

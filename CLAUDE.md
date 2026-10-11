@@ -70,6 +70,10 @@ MAN-125: `manta devices` lists audio inputs and optional Soapy selectors;
 floor without decoding or services. See
 `docs/DECISIONS/2026-10-10-man125-source-diagnostics.md`.
 
+MAN-127: `manta calibrate` measures the receiver's ppm offset against a
+known carrier and saves `[input].freq_correction_ppm` after confirmation —
+see docs/DECISIONS/2026-10-11-man127-calibrate-command.md.
+
 ## Documents (read in this order)
 
 - `README.md` — goals and non-goals

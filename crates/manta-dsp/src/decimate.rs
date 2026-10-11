@@ -127,14 +127,14 @@ pub fn design_halfband(taps: usize) -> Vec<f32> {
 /// As of the `CUTOFF_FRACTION` change (see its doc comment), the cutoff no
 /// longer sits at exactly `fs_in/4`, so those taps are no longer exactly
 /// zero either -- issue #176's skip opportunity no longer applies here.
-struct HalfbandStage {
+pub(crate) struct HalfbandStage {
     taps: Vec<f32>,
     hist: std::collections::VecDeque<Complex32>,
     parity: u64,
 }
 
 impl HalfbandStage {
-    fn new(taps: Vec<f32>) -> Self {
+    pub(crate) fn new(taps: Vec<f32>) -> Self {
         let len = taps.len();
         HalfbandStage {
             taps,
@@ -143,7 +143,17 @@ impl HalfbandStage {
         }
     }
 
-    fn process(&mut self, input: &[Complex32]) -> Vec<Complex32> {
+    /// Clear the filter history and the decimation phase, returning the
+    /// stage to its just-constructed state (used across an input
+    /// discontinuity so pre-gap samples never leak into post-gap output).
+    pub(crate) fn reset(&mut self) {
+        for s in self.hist.iter_mut() {
+            *s = Complex32::new(0.0, 0.0);
+        }
+        self.parity = 0;
+    }
+
+    pub(crate) fn process(&mut self, input: &[Complex32]) -> Vec<Complex32> {
         let mut out = Vec::with_capacity(input.len() / 2 + 1);
         for &x in input {
             self.hist.pop_front();

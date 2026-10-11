@@ -7,6 +7,8 @@ pub mod listen;
 pub use listen::{listen, listen_with_observers, ListenObservers};
 pub mod latency;
 pub use latency::{DecodeLatencyObserver, DecodeLatencySnapshot, DECODE_LATENCY_BUCKETS_SECONDS};
+pub mod calibrate;
+pub use calibrate::{calibrate, CalibrateOptions, CalibrationReport};
 pub mod doctor;
 pub use doctor::{doctor, DoctorReport, Verdict, MAX_DURATION, MIN_DURATION};
 pub mod soak;
