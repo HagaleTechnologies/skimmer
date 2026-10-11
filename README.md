@@ -319,6 +319,53 @@ receiver, and run `manta config check --config manta.toml` before you
 enable a service. `manta run` refuses to start while the station callsign
 is still `N0CALL`.
 
+## Logs
+
+`manta run` writes its log to stderr: the startup banner, the readiness
+line, a periodic status line, client connections and rejections, and
+uplink events. Under the service kit it lands in the journal (systemd),
+in `/var/log/manta/manta.log` (launchd) or in the container log (Docker).
+
+Log lines are coloured only when stderr is a terminal, so a file, a pipe
+or the journal gets plain text; `NO_COLOR=1` turns colour off on a
+terminal too.
+
+For leveled records, `-v` adds debug detail and `-vv` trace; `-q` keeps
+warnings and errors, `-qq` only errors, `-qqq` none. `--log-level` names a
+level (`off`, `error`, `warn`, `info`, `debug`, `trace`). Each is shorthand for the
+`RUST_LOG` environment variable, the underlying mechanism, and overrides
+it. With none of them `RUST_LOG` decides, and `info` is the default. Use
+`RUST_LOG` itself to filter by module.
+
+In text format, startup notes, plain warnings, the `manta: listening;`
+readiness marker and source-reconnect lines are unfiltered, even with
+`-qqq` or `--log-level off`. In JSON format these become INFO or WARN
+records and follow the selected filter. Fatal errors remain visible in
+both formats at every level. Decoded text in text format and stdout's
+`SPOT:` lines are product output and are not controlled by the log level.
+
+For example:
+
+```sh
+manta run --config manta.toml -q        # leveled warnings and errors, plus unfiltered text lines
+RUST_LOG=info,manta_server=debug manta run --config manta.toml
+```
+
+For a log aggregator, `--log-format json` writes one JSON object per line:
+
+```sh
+manta run --config manta.toml --log-format json
+```
+
+Each record has `timestamp`, `level`, `message` and `target`; an event's
+own fields (`ip`, `login`, …) are top-level keys, and events inside a
+client connection carry a `span` object with its `peer`. With
+`--log-format json` every line `manta run` writes to stderr is a JSON
+object, except clap usage errors, the deprecation warning for a retired
+flag spelling, and a panic. Decoded text on stderr, when enabled, becomes
+INFO records with target `manta::text`. stdout (`SPOT:` lines, or `--json`'s
+JSON Lines) is unchanged.
+
 ## Inputs
 
 | Source | How | Status |
@@ -333,6 +380,53 @@ The source frequency and rate flags end in `-hz`: `--kiwi-freq-hz`,
 `--soapy-freq-hz`, `--soapy-rate-hz`, `--hpsdr-freq-hz` and
 `--hpsdr-rate-hz`. The older `--kiwi-freq` / `--soapy-freq` /
 `--soapy-rate` / `--hpsdr-freq` / `--hpsdr-rate` spellings still work.
+
+### Check that samples reach manta
+
+List inputs, check the selected source, then use `doctor` to assess decoding:
+
+```sh
+manta devices
+manta check --device "USB Audio"
+manta check --config manta.toml --json
+manta check capture.wav --source-iq
+manta doctor --config manta.toml --duration 10
+```
+
+Audio selectors are names matched case-insensitively by substring, not numeric
+indexes. `devices` lists input-capable devices without opening a stream. With
+`--features soapy`, it also lists complete Soapy selector strings for
+`--soapy-driver`. HPSDR discovery is not supported; use `--hpsdr-host HOST`
+with an `hpsdr` build. KiwiSDR uses `--kiwi-host HOST`. `devices --json` reports
+empty, unavailable and failed enumeration separately; a backend error exits 1
+while retaining the other results.
+
+`check [SOURCE]` treats SOURCE as an audio WAV path, equivalent to `--source`.
+Audio files must be mono at 48000 Hz; add `--source-iq` for complex stereo IQ.
+Only one source selector is accepted. It replaces a configured input wholesale,
+just like `run`. With no selector, `check` uses `--config`, then `MANTA_CONFIG`,
+then environment/default settings; it does not search for `./manta.toml`.
+`manta config check` validates configuration without opening a receiver;
+`manta check` opens it and reads samples without decoding, listeners or uplinks.
+It validates typed config but does not read unused spot asset files.
+
+The default window is three seconds of delivered samples; `--duration` accepts
+1 to 60 seconds. The report shows the actual **stream sample rate** after
+resampling and `--capture-rate-hz` decimation, center frequency, passband,
+received sample count, input power and a brief per-channel noise-floor estimate.
+KiwiSDR's stream rate is 96000 Hz after resampling, not its native receiver rate.
+Power is relative dBFS, not calibrated RF power, dBm or spot SNR. The floor is
+the lower quartile in each eligible channel, summarized across the passband.
+See the [measurement definition](docs/DECISIONS/2026-10-10-man125-source-diagnostics.md).
+
+Digital silence is reported explicitly and can exit 0 because samples arrived.
+It does not prove that an antenna is connected. Empty input or input too short
+for a complete channelizer hop has no floor and exits 1; a shorter file with a
+measured floor exits 0 and reports its actual duration and end of file. Errors
+go to stderr; `--json` emits one report on stdout. A sampling deadline exits 1
+and retains any measurements. The deadline is duration plus five seconds after
+opening, checked between reads. Native open/read calls can exceed it, so
+`--duration` is not a hard wall-clock timeout. No reconnect loop runs.
 
 Targets Linux (x86-64 and ARM, Raspberry Pi 4 class), macOS, and Windows.
 The CPU budget is a full 192 kS/s passband inside one Raspberry Pi 4 core,

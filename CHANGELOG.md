@@ -22,6 +22,7 @@ the git history and `docs/DECISIONS/`.
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ## [0.1.0] - 2026-10-11
 
 Pre-stability alpha, expect breakage: manta has not cleared its own M2/M3
@@ -32,6 +33,20 @@ acceptance gates.
 - Prebuilt archives for Linux (x86-64, arm64), macOS (x86-64, arm64) and
   Windows (x86-64) on each GitHub Release, with `SHA256SUMS` and a
   build-provenance attestation (MAN-298).
+=======
+### Added
+
+- `manta run` takes `-v`/`-vv` and `-q`/`-qq`/`-qqq` and
+  `--log-level <LEVEL>`, each shorthand for `RUST_LOG=<level>` that
+  overrides it, and `--log-format json`, which writes every stderr log line
+  as one JSON object for a log aggregator (MAN-124).
+
+### Fixed
+
+- `manta run`'s log lines carry no colour escape codes when stderr is not a
+  terminal (a file, a pipe, the journal or a container log); `NO_COLOR` is
+  still honoured on a terminal (MAN-124).
+>>>>>>> 5c3c64e0d15dd23f1f34f890357312e208119611
 
 ### Changed
 
