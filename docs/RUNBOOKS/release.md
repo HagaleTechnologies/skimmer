@@ -284,7 +284,10 @@ deliberately leaves `:latest` untouched — README's `docker run
 ghcr.io/hagaletechnologies/manta:latest` install command must always hand
 users a release, never a release candidate. They are also published as
 GitHub pre-releases, so `releases/latest` (README's download links) never
-serves one (MAN-298).
+serves one (MAN-298). The same recency check decides which GitHub Release
+is "Latest": `validate-tag` runs `is-newest-stable`, and `release` passes the
+answer to `make_latest`, so a stable tag older than the newest stable tag
+publishes its Release without taking over `releases/latest`.
 
 ## The one-time GHCR visibility step
 

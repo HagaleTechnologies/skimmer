@@ -216,6 +216,18 @@ class ReleaseJobTests(unittest.TestCase):
         self.assertEqual(with_field(publish_step(), "prerelease"), "${{ contains(github.ref_name, '-') }}",
                          "an -rc tag must not become the release that releases/latest serves")
 
+    def test_only_the_newest_stable_tag_becomes_the_latest_release(self):
+        # GitHub marks every new non-prerelease Release "Latest" unless told otherwise, so an
+        # older-version tag released after a newer one would take over releases/latest.
+        self.assertEqual(with_field(publish_step(), "make_latest"), "${{ needs.validate-tag.outputs.latest }}")
+        gate = wf.job_block(wf.read(WORKFLOW), "validate-tag")
+        self.assertEqual(wf.field(wf.sub(gate, "outputs"), "latest"), "${{ steps.latest.outputs.latest }}")
+        step = wf.step_by_id(gate, "latest")
+        self.assertIsNotNone(step, "validate-tag has no step with id: latest")
+        self.assertEqual(wf.field(step, "if"), "github.event_name == 'push'")
+        self.assertIn('scripts/release-version.sh is-newest-stable "$GITHUB_REF_NAME"', executable(wf.run_body(step)),
+                      "the same recency predicate as publish-latest's :latest write")
+
     def test_no_other_release_job_can_mint_a_signing_token(self):
         for name in RELEASE_WORKFLOWS:
             text = wf.read(name)

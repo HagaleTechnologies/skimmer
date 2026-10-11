@@ -70,6 +70,16 @@ matches the `:latest` rule: without it a `v0.2.0-rc.1` would become GitHub's
 release candidate. `v0.1.0` stays a normal release, so the README badge and
 `releases/latest` resolve to it.
 
+GitHub also marks every new non-prerelease Release "Latest" by default, so a
+stable tag older than the newest one (released after it) would take over
+`releases/latest` as well. `validate-tag` therefore runs the same
+`scripts/release-version.sh is-newest-stable` check that guards `:latest`,
+and `release` passes the answer to `make_latest`. It runs in `validate-tag`
+because the signing job checks out no code. A newer tag pushed after that
+step is the residual race MAN-65 already accepts for `:latest`. GitHub's
+`make_latest: legacy` was not used: its documented rule ("release creation
+date and higher semantic version") does not say which wins.
+
 ### D4: README names no version
 
 README downloads through `releases/latest/download/<archive>`, so it does
