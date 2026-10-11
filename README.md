@@ -286,15 +286,24 @@ Log lines are coloured only when stderr is a terminal, so a file, a pipe
 or the journal gets plain text; `NO_COLOR=1` turns colour off on a
 terminal too.
 
-`-v` adds debug detail and `-vv` trace; `-q` keeps warnings and errors,
-`-qq` only errors, `-qqq` nothing; `--log-level` names a level (`off`,
-`error`, `warn`, `info`, `debug`, `trace`). Each is shorthand for the
+For leveled records, `-v` adds debug detail and `-vv` trace; `-q` keeps
+warnings and errors, `-qq` only errors, `-qqq` none. `--log-level` names a
+level (`off`, `error`, `warn`, `info`, `debug`, `trace`). Each is shorthand for the
 `RUST_LOG` environment variable, the underlying mechanism, and overrides
 it. With none of them `RUST_LOG` decides, and `info` is the default. Use
-`RUST_LOG` itself to filter by module:
+`RUST_LOG` itself to filter by module.
+
+In text format, startup notes, plain warnings, the `manta: listening;`
+readiness marker and source-reconnect lines are unfiltered, even with
+`-qqq` or `--log-level off`. In JSON format these become INFO or WARN
+records and follow the selected filter. Fatal errors remain visible in
+both formats at every level. Decoded text in text format and stdout's
+`SPOT:` lines are product output and are not controlled by the log level.
+
+For example:
 
 ```sh
-manta run --config manta.toml -q        # warnings and errors only
+manta run --config manta.toml -q        # leveled warnings and errors, plus unfiltered text lines
 RUST_LOG=info,manta_server=debug manta run --config manta.toml
 ```
 
@@ -309,8 +318,9 @@ own fields (`ip`, `login`, …) are top-level keys, and events inside a
 client connection carry a `span` object with its `peer`. With
 `--log-format json` every line `manta run` writes to stderr is a JSON
 object, except clap usage errors, the deprecation warning for a retired
-flag spelling, and a panic. stdout (decoded text, or `--json`'s JSON
-Lines) is unchanged.
+flag spelling, and a panic. Decoded text on stderr, when enabled, becomes
+INFO records with target `manta::text`. stdout (`SPOT:` lines, or `--json`'s
+JSON Lines) is unchanged.
 
 ## Inputs
 

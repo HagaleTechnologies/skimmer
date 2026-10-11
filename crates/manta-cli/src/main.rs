@@ -4058,7 +4058,11 @@ fn real_main() -> Result<()> {
                         return;
                     }
                     if let Some(line) = text_lines.ingest(ev) {
-                        eprintln!("{line}");
+                        if logging::is_json() {
+                            tracing::info!(target: "manta::text", "{line}");
+                        } else {
+                            eprintln!("{line}");
+                        }
                     }
                 },
                 // Provisional CLI-debugging text/JSON printed below is NOT
@@ -4090,27 +4094,7 @@ fn real_main() -> Result<()> {
                         println!("{}", serde_json::json!({ "spot": spot }));
                         return;
                     }
-<<<<<<< HEAD
-                    // MAN-124: under `--log-format json` the stderr spot
-                    // line is a structured record too. `snr_db` is the
-                    // pipeline's native 2500 Hz value, as below.
-                    if logging::is_json() {
-                        tracing::info!(
-                            target: "manta::spot",
-                            callsign = %spot.callsign,
-                            spot_type = ?spot.spot_type,
-                            freq_hz = spot.freq_hz,
-                            snr_db = spot.snr_db,
-                            wpm = spot.wpm,
-                            confidence = spot.confidence,
-                            "spot"
-                        );
-                        return;
-                    }
-                    eprintln!(
-=======
                     println!(
->>>>>>> 72ca072ce1b3557406981ba227b584c9e22196b1
                         "SPOT: {} ({:?}) {:.1} Hz {:.0} dB {:.0} wpm conf={:.2}",
                         spot.callsign,
                         spot.spot_type,
@@ -4175,7 +4159,11 @@ fn real_main() -> Result<()> {
             // tracks, so their partial lines are printed here, on both paths.
             if print_text {
                 for line in text_lines.finish() {
-                    eprintln!("{line}");
+                    if logging::is_json() {
+                        tracing::info!(target: "manta::text", "{line}");
+                    } else {
+                        eprintln!("{line}");
+                    }
                 }
             }
 
@@ -6745,16 +6733,12 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
     /// Flags with no config key, by design.
     const CLI_ONLY: &[&str] = &[
         "json",
-<<<<<<< HEAD
-=======
         "decoded_text",
->>>>>>> 72ca072ce1b3557406981ba227b584c9e22196b1
         "duration",
         "config",
         "path",
         "help",
         "version",
-<<<<<<< HEAD
         "verbose",
         "quiet",
         "log_level",
@@ -6827,9 +6811,6 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
             assert_eq!(err.kind(), ErrorKind::UnknownArgument, "{argv:?}: {err}");
         }
     }
-=======
-    ];
->>>>>>> 72ca072ce1b3557406981ba227b584c9e22196b1
 
     #[test]
     fn every_config_backed_flag_maps_to_a_key() {

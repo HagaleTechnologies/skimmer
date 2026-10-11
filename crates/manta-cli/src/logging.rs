@@ -63,6 +63,9 @@ pub struct LogOpts {
     )]
     pub verbose: u8,
     /// Less log detail: -q is warn, -qq error, -qqq off. Overrides RUST_LOG.
+    ///
+    /// Text notes, warnings, readiness and reconnect lines are unfiltered.
+    /// In JSON format they follow the selected level. Fatal errors always print.
     #[arg(
         short = 'q',
         long = "quiet",
@@ -72,6 +75,9 @@ pub struct LogOpts {
     pub quiet: u8,
     /// Log level for the log manta writes to stderr. Same as setting
     /// RUST_LOG to this level, and overrides RUST_LOG.
+    ///
+    /// Text notes, warnings, readiness and reconnect lines are unfiltered.
+    /// In JSON format they follow the selected level. Fatal errors always print.
     ///
     /// Without -v, -q or --log-level, RUST_LOG decides (for example
     /// RUST_LOG=info,manta_server=debug), and info is the default.
@@ -183,7 +189,7 @@ pub fn fatal(message: &str) {
     tracing::subscriber::with_default(sub, || tracing::error!(target: "manta", "{message}"));
 }
 
-/// A `note: ...`-style stderr line: unchanged text, or an INFO record under
+/// A `note: ...`-style stderr line: unfiltered text, or a filtered INFO record under
 /// `--log-format json`.
 pub fn note(line: &str) {
     if is_json() {
@@ -193,7 +199,7 @@ pub fn note(line: &str) {
     }
 }
 
-/// A `warning: ...`-style stderr line: unchanged text, or a WARN record
+/// A `warning: ...`-style stderr line: unfiltered text, or a filtered WARN record
 /// under `--log-format json`.
 pub fn warning(line: &str) {
     if is_json() {

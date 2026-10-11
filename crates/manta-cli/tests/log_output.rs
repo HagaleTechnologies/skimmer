@@ -214,11 +214,11 @@ fn json_format_makes_every_stderr_line_a_json_object() {
                 && message(v).contains("telnet greeting will omit QTH/grid")),
         "no greeting warning record: {stderr}"
     );
+    // MAN-123: spots are stdout product output in either log format.
+    let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(
-        records.iter().any(|v| v["target"] == "manta::spot"
-            && v["callsign"] == "W1AW"
-            && v["freq_hz"].is_number()),
-        "no structured spot record: {stderr}"
+        stdout.lines().any(|line| line.starts_with("SPOT: W1AW ")),
+        "{stdout}"
     );
 }
 
@@ -326,4 +326,60 @@ fn json_format_fatal_error_survives_a_filter_that_drops_it() {
             "{args:?} {envs:?}: {stderr}"
         );
     }
+}
+
+#[test]
+fn log_help_documents_unfiltered_text_helpers() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_manta"))
+        .args(["run", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        help.contains("Text notes, warnings, readiness and reconnect lines are unfiltered"),
+        "{help}"
+    );
+}
+
+#[test]
+fn json_format_carries_grouped_decoded_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = daemon(dir.path(), &["--decoded-text", "--log-format", "json"], &[]);
+    let stderr = stderr_of(&out);
+    let records = json_records(&stderr);
+    assert!(
+        records.iter().any(|v| v["target"] == "manta::text"
+            && v["level"] == "INFO"
+            && v["message"].as_str().unwrap().starts_with("[track ")),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.lines().any(|line| line.starts_with("SPOT: W1AW ")),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn text_helper_exceptions_survive_off_while_json_helpers_are_filtered() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = server_config(
+        dir.path(),
+        "[input]\ntype = \"kiwi\"\nhost = \"h\"\nfreq_hz = 7000000.0\n",
+    );
+    let text = daemon_with(dir.path(), &cfg, &["-qqq"], &[]);
+    let stderr = stderr_of(&text);
+    assert!(
+        stderr.contains("note: --source selects the source"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(READY), "{stderr}");
+    assert!(
+        !stderr.contains(" INFO ") && !stderr.contains(" WARN "),
+        "{stderr}"
+    );
+    let structured = daemon_with(dir.path(), &cfg, &["-qqq", "--log-format", "json"], &[]);
+    assert!(stderr_of(&structured).is_empty());
+    assert_eq!(text.stdout, structured.stdout);
 }

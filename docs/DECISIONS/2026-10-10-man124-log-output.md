@@ -45,16 +45,17 @@ raw `ESC[..m` bytes. The only verbosity control was the undocumented
   operator-facing format: an upgrade that changes them must be called out
   in `CHANGELOG.md`.
 - **D6. Plain lines under JSON.** `logging::note` and `logging::warning`
-  print their line byte-for-byte in text mode and emit an INFO or WARN
-  record with the same text (prefix included) under JSON. Notes, the
+  print their line byte-for-byte, without level filtering, in text mode
+  and emit a filtered INFO or WARN record with the same text (prefix
+  included) under JSON. Notes, the
   readiness marker and "reconnected after" are `note`; the cty age warning,
   the missing-dial-frequency warning, "lost" and "reconnect attempt failed"
   are `warning`. `soak` and `doctor` share these call sites but never call
   `init`, so their output stays plain.
-- **D7. `SPOT:` under JSON** becomes an INFO record with
-  `target: "manta::spot"` and `callsign`, `spot_type`, `freq_hz`, `snr_db`
-  (the pipeline's native 2500 Hz value, as the text line prints),
-  `wpm` and `confidence`.
+- **D7. Product output after MAN-123.** `SPOT:` lines stay on stdout in
+  both log formats. Enabled decoded text on stderr becomes an INFO record
+  with `target: "manta::text"` and the grouped line as `message` under JSON.
+  This follows the plan's MAN-123 integration rule.
 - **D8. A fatal error under JSON.** `main` wraps `real_main`; an `Err` under
   JSON is one `ERROR` record (message trimmed of trailing newlines) and exit
   status 1. Text mode keeps Rust's `Error: …` line. Under JSON the record is
@@ -73,8 +74,8 @@ raw `ESC[..m` bytes. The only verbosity control was the undocumented
    reconnect lines in text mode?** No. They have no level in text mode,
    tests pin their text, and filtering them would make
    `RUST_LOG=manta_server=debug` (MAN-59's recipe) hide them too.
-3. **Should the stderr `SPOT:` line be a structured record under JSON?** Yes,
-   while it is on stderr.
+3. **Should `SPOT:` lines become structured log records?** No longer:
+   MAN-123 moved them to stdout. See D7.
 
 ## Plain-text exceptions under `--log-format json`
 
