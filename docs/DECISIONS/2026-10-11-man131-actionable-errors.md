@@ -94,7 +94,9 @@ settings for a manta bug.
   frequencies. Pass the centre frequency, e.g. --center-freq-hz 14000000.`
   `--center-freq-hz HZ` overrides the sidecar, with no warning, and is
   validated like `--dial-freq-hz` (finite and positive; clap exits 2
-  otherwise). `decode --json` stdout is unchanged without the flag, and
+  otherwise). With the flag the sidecar is not read at all
+  (`WavIqSource::open_with_center_freq_hz`), so a malformed or foreign
+  `<stem>.json` cannot fail the decode. `decode --json` stdout is unchanged without the flag, and
   `--center-freq-hz 14000000` on a sidecar-less copy reproduces the 14 MHz
   sidecar decode byte for byte. A missing WAV still fails with just its
   `open WAV` error. Scope is `decode` only: not `oracle`, and not
@@ -132,7 +134,8 @@ settings for a manta bug.
 - `crates/manta-input/src/audio.rs` — `from_device`, `read_real`,
   `audio_input_hint`, `with_silence_notice`, the message constructors.
 - `crates/manta-input/src/devices.rs` — `quoted_name`.
-- `crates/manta-input/src/lib.rs` — `read_sidecar`, `sidecar_path`.
+- `crates/manta-input/src/lib.rs` — `read_sidecar`, `sidecar_path`,
+  `WavIqSource::open_with_center_freq_hz`.
 - `crates/manta-cli/src/main.rs` — `audio_silence_warning`,
   `recording_center_warning`, `parse_center_freq_hz`, the `Decode` handler.
 - Tests: `crates/manta-cli/tests/live_audio_errors.rs`,

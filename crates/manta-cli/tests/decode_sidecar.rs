@@ -145,6 +145,27 @@ fn center_freq_hz_overrides_a_sidecar() {
 }
 
 #[test]
+fn center_freq_hz_gets_past_a_malformed_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = v1_fixture(dir.path());
+    std::fs::write(dir.path().join("v1.json"), "{\"other_tool\": true}").unwrap();
+
+    let without_flag = decode(&["--json", wav.to_str().unwrap()]);
+    assert!(!without_flag.status.success());
+    assert!(stderr_of(&without_flag).contains("parse sidecar"));
+
+    let with_flag = decode(&[
+        "--json",
+        "--center-freq-hz",
+        "14000000",
+        wav.to_str().unwrap(),
+    ]);
+    let stderr = stderr_of(&with_flag);
+    assert!(with_flag.status.success(), "{stderr}");
+    assert!(report_freq_hz(&with_flag) > 14_000_000.0, "{stderr}");
+}
+
+#[test]
 fn center_freq_hz_rejects_bad_values() {
     // clap rejects the value before any I/O, so the WAV need not exist. The
     // `=` form keeps clap from reading a leading `-` as another flag.

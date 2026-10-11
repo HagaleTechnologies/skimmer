@@ -214,7 +214,17 @@ pub struct WavIqSource {
 
 impl WavIqSource {
     /// Eager-loads the whole file (M0 pinned decision 15; files are <~100 MB). ARCHITECTURE §3.
+    /// The centre frequency comes from the `<stem>.json` sidecar, `0.0` without one.
     pub fn open(path: &Path) -> Result<Self> {
+        let mut src = Self::open_with_center_freq_hz(path, 0.0)?;
+        src.center_freq_hz = read_sidecar(path)?.map_or(0.0, |sc| sc.center_freq_hz);
+        Ok(src)
+    }
+
+    /// `open` with a caller-supplied centre frequency; the sidecar is not
+    /// read at all, so a malformed or foreign `<stem>.json` cannot fail it
+    /// (MAN-131, `decode --center-freq-hz`).
+    pub fn open_with_center_freq_hz(path: &Path, center_freq_hz: f64) -> Result<Self> {
         let mut reader =
             hound::WavReader::open(path).with_context(|| format!("open WAV {}", path.display()))?;
         let spec = reader.spec();
@@ -237,8 +247,6 @@ impl WavIqSource {
             .iter()
             .map(|&[re, im]| Complex32::new(re, im))
             .collect();
-
-        let center_freq_hz = read_sidecar(path)?.map_or(0.0, |sc| sc.center_freq_hz);
 
         Ok(WavIqSource {
             samples,
@@ -365,6 +373,16 @@ mod tests {
         // `WavIqSource::open` reports the same text.
         let open_err = format!("{:#}", WavIqSource::open(&wav).err().expect("bad sidecar"));
         assert!(open_err.contains(&want), "{open_err}");
+    }
+
+    #[test]
+    fn open_with_center_freq_hz_never_reads_the_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("fix.wav");
+        write_f32_wav(&wav, &samples(), 96_000);
+        std::fs::write(dir.path().join("fix.json"), b"{not json").unwrap();
+        let src = WavIqSource::open_with_center_freq_hz(&wav, 7_030_000.0).unwrap();
+        assert_eq!(src.center_freq_hz(), 7_030_000.0);
     }
 
     #[test]

@@ -6877,6 +6877,9 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
         "duration",
         "config",
         "path",
+        // `decode --center-freq-hz` (MAN-131 D8): a recording's centre, not
+        // the live receiver's `input.center_freq_hz`.
+        "center_freq_hz",
         "help",
         "version",
     ];
