@@ -123,9 +123,14 @@ pub(crate) fn save_freq_correction_ppm(path: &Path, ppm: f64) -> Result<Option<f
         name.to_string_lossy(),
         std::process::id()
     ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    // Owner-only until the original's owner and mode are copied over: the
+    // config can hold a receiver password or uplink credentials, and a
+    // umask-default temp file would expose them to other local users.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options
         .open(&temp)
         .with_context(|| format!("creating temp file {}", temp.display()))?;
     let mut guard = TempGuard {
@@ -135,10 +140,10 @@ pub(crate) fn save_freq_correction_ppm(path: &Path, ppm: f64) -> Result<Option<f
     file.write_all(new_text.as_bytes())
         .and_then(|()| file.sync_all())
         .with_context(|| format!("writing temp file {}", temp.display()))?;
-    fs::set_permissions(&temp, meta.permissions())
-        .with_context(|| format!("setting the permissions of {}", temp.display()))?;
     #[cfg(unix)]
     keep_owner(&target, &meta, &temp, ppm)?;
+    fs::set_permissions(&temp, meta.permissions())
+        .with_context(|| format!("setting the permissions of {}", temp.display()))?;
     drop(file);
 
     let loaded =

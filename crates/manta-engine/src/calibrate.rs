@@ -171,20 +171,41 @@ fn require_absolute_centre(center_hz: f64) -> Result<()> {
     Ok(())
 }
 
-/// Search half-width for `reference` on a receiver centred at `center_hz`
-/// delivering `passband` (offsets from the centre), or `None` if unusable.
-fn half_width(center_hz: f64, passband: (f64, f64), search_ppm: f64, ref_hz: f64) -> Option<f64> {
+/// The search half-width `search_ppm` asks for around `ref_hz`, capped so
+/// that no carrier found inside it (allowing half a ~1 Hz bin of
+/// interpolation past the edge) needs a correction beyond the +/-1000 ppm
+/// `freq_correction_ppm` accepts: a carrier `d` Hz low needs
+/// `(r / (r - d) - 1) * 1e6` ppm, which reaches 1000 at `d = r * (1 - 1/1.001)`.
+fn ppm_half_width(search_ppm: f64, ref_hz: f64) -> f64 {
+    let max_low_hz = ref_hz * (1.0 - 1.0 / (1.0 + MAX_SEARCH_PPM * 1e-6)) - 1.0;
+    (search_ppm * ref_hz * 1e-6).min(max_low_hz)
+}
+
+/// The half-width the receiver's passband geometry allows for `ref_hz`:
+/// inside the inner passband and, for an IQ receiver, away from its centre.
+fn geometric_half_width(center_hz: f64, passband: (f64, f64), ref_hz: f64) -> f64 {
     let (lo, hi) = passband;
     let edge = PASSBAND_EDGE_FRACTION * (hi - lo);
     let (lo_in, hi_in) = (lo + edge, hi - edge);
     let off = ref_hz - center_hz;
-    let mut w = (search_ppm * ref_hz * 1e-6)
-        .min(off - lo_in)
-        .min(hi_in - off);
+    let mut w = (off - lo_in).min(hi_in - off);
     if lo < 0.0 && hi > 0.0 {
         w = w.min(off.abs() - DC_GUARD_HZ);
     }
+    w
+}
+
+/// Search half-width for `reference` on a receiver centred at `center_hz`
+/// delivering `passband` (offsets from the centre), or `None` if unusable.
+fn half_width(center_hz: f64, passband: (f64, f64), search_ppm: f64, ref_hz: f64) -> Option<f64> {
+    let w =
+        ppm_half_width(search_ppm, ref_hz).min(geometric_half_width(center_hz, passband, ref_hz));
     (w >= MIN_HALF_WIDTH_HZ).then_some(w)
+}
+
+/// The `--search-ppm` that gives `ref_hz` the minimum search half-width.
+fn min_search_ppm_for(ref_hz: f64) -> f64 {
+    (MIN_HALF_WIDTH_HZ / ref_hz * 1e6).ceil()
 }
 
 /// Suggested centre for `--tune-hz` that puts `reference` inside a
@@ -219,6 +240,14 @@ pub fn plan_references(
                 reference,
                 half_width_hz,
             }]),
+            None if geometric_half_width(center_hz, passband, hz) >= MIN_HALF_WIDTH_HZ => bail!(
+                "at --search-ppm {} the search window around --reference-hz {hz:.1} is only \
+                 ±{:.1} Hz, under the {MIN_HALF_WIDTH_HZ:.0} Hz minimum; raise --search-ppm to \
+                 at least {}",
+                opts.search_ppm,
+                ppm_half_width(opts.search_ppm, hz),
+                min_search_ppm_for(hz)
+            ),
             None => bail!(
                 "--reference-hz {hz:.1} is not usable in this receiver's passband ({window}); \
                  it must sit inside it, at least {MIN_HALF_WIDTH_HZ:.0} Hz from its edges{}",
@@ -251,6 +280,22 @@ pub fn plan_references(
     });
     planned.truncate(MAX_REFERENCES);
     if planned.is_empty() {
+        // References the passband holds but the search window is too narrow
+        // for: the fix is --search-ppm, not a retune.
+        if let Some(r) = REFERENCES
+            .iter()
+            .find(|r| geometric_half_width(center_hz, passband, r.hz) >= MIN_HALF_WIDTH_HZ)
+        {
+            bail!(
+                "at --search-ppm {} the search window around {:.1} Hz, {}, is only ±{:.1} Hz, \
+                 under the {MIN_HALF_WIDTH_HZ:.0} Hz minimum; raise --search-ppm to at least {}",
+                opts.search_ppm,
+                r.hz,
+                r.label,
+                ppm_half_width(opts.search_ppm, r.hz),
+                min_search_ppm_for(r.hz)
+            );
+        }
         bail!(
             "no known reference frequency is usable in this receiver's passband ({window}); {}",
             retune_hint(center_hz, is_audio, opts.search_ppm)
@@ -741,6 +786,40 @@ mod tests {
                 ..opts(60)
             };
             assert!(plan_references(CENTRE, (-24_000.0, 24_000.0), false, &o).is_err());
+        }
+    }
+
+    #[test]
+    fn plan_names_search_ppm_when_the_window_is_too_narrow() {
+        let o = CalibrateOptions {
+            reference_hz: Some(1_000_000.0),
+            ..opts(60)
+        };
+        let e = plan_references(1_001_500.0, (-24_000.0, 24_000.0), false, &o)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("raise --search-ppm to at least 100"), "{e}");
+        let o = CalibrateOptions {
+            search_ppm: 1.0,
+            ..opts(60)
+        };
+        let e = plan_references(CENTRE, (-24_000.0, 24_000.0), false, &o)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("raise --search-ppm to at least 10"), "{e}");
+    }
+
+    #[test]
+    fn search_window_never_allows_a_correction_beyond_1000_ppm() {
+        for hz in [200_000.0, 2_500_000.0, 10e6, 28.2e6] {
+            let w = ppm_half_width(MAX_SEARCH_PPM, hz);
+            // Half a bin of interpolation past the low edge.
+            let ppm = correction_ppm(hz, hz - w - 0.5);
+            assert!(
+                manta_spot::calibration_factor_from_ppm(ppm).is_ok(),
+                "{hz} {ppm}"
+            );
+            assert!((ppm_half_width(50.0, hz) - 50e-6 * hz).abs() < 1e-9);
         }
     }
 
