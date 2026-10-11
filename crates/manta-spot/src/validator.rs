@@ -1416,6 +1416,22 @@ impl Validator {
     /// fixed ~20-22 WPM, well under `MAX_PLAUSIBLE_WPM`. A single WPM
     /// value covers every pending candidate on this track -- it's a
     /// track-level property, not a per-candidate one.
+    /// MAN-78: the lists can be replaced between a beacon's capture and its
+    /// track's close. Counts and reports a pending beacon the current lists
+    /// suppress; a no-op when they were not replaced, since capture already
+    /// passed the same checks.
+    fn operator_suppressed(&mut self, pb: &PendingBeacon) -> bool {
+        if self.blocklist.contains(&pb.candidate) {
+            self.suppression_counts.blocklist += 1;
+            return true;
+        }
+        if self.notch.contains(pb.freq_hz) {
+            self.suppression_counts.notch += 1;
+            return true;
+        }
+        false
+    }
+
     fn resolve_pending_beacons(&mut self, track_id: u32) -> Vec<Spot> {
         let (wpm, wpm_confirmed, pending) = {
             let Some(track) = self.tracks.get_mut(&track_id) else {
@@ -1431,22 +1447,24 @@ impl Validator {
         // a genuine slow speed -- refuse to resolve rather than let a
         // never-measured survivor pass the plausibility check on a
         // placeholder value (round 10).
-        if pending.is_empty() || !wpm_confirmed || wpm > MAX_PLAUSIBLE_WPM {
+        if pending.is_empty() {
+            return Vec::new();
+        }
+        if !wpm_confirmed || wpm > MAX_PLAUSIBLE_WPM {
+            // Operator suppression takes precedence over the automatic
+            // speed rejection (`blocklisted_beacon_above_max_wpm_still_counts_as_suppressed`),
+            // so lists reloaded since capture are still counted here (MAN-78).
+            for pb in &pending {
+                self.operator_suppressed(pb);
+            }
             return Vec::new();
         }
         pending
             .into_iter()
             .filter_map(|pb| {
-                // MAN-78: the lists can be replaced between capture and
-                // close; a no-op when they were not (capture already passed
-                // the same checks). Before `gate.record`, so a suppressed
-                // beacon never feeds the repetition gate.
-                if self.blocklist.contains(&pb.candidate) {
-                    self.suppression_counts.blocklist += 1;
-                    return None;
-                }
-                if self.notch.contains(pb.freq_hz) {
-                    self.suppression_counts.notch += 1;
+                // Before `gate.record`, so a suppressed beacon never feeds
+                // the repetition gate.
+                if self.operator_suppressed(&pb) {
                     return None;
                 }
                 // pb.origin_track_id, not the resolving `track_id`
@@ -1783,6 +1801,32 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
         let spots = run(&transmission_events(1, &["K5ARH", "T"], 0), &mut v);
         assert!(spots.is_empty());
         v.replace_operator_lists(&[], Blocklist::parse("K5ARH\n"), NotchList::default());
+        let spots = v.ingest(&DecoderEvent::TrackClosed {
+            track_id: 1,
+            closure: ClosureKind::SignalEnded,
+        });
+        assert!(spots.is_empty(), "got {spots:?}");
+        assert_eq!(v.suppression_counts().blocklist, 1);
+    }
+
+    /// Codex review on PR #232: a beacon blocklisted by a reload and then
+    /// closed above `MAX_PLAUSIBLE_WPM` still counts as operator
+    /// suppression, matching `blocklisted_beacon_above_max_wpm_still_counts_as_suppressed`.
+    #[test]
+    fn pending_beacon_blocklisted_by_a_reload_then_too_fast_counts_as_suppressed() {
+        let mut v = Validator::new(FS, CTY_FIXTURE, None);
+        seed_meta(&mut v, 1);
+        v.ingest(&DecoderEvent::SpeedUpdate {
+            track_id: 1,
+            wpm: 22.0,
+        });
+        let spots = run(&transmission_events(1, &["K5ARH", "T"], 0), &mut v);
+        assert!(spots.is_empty());
+        v.replace_operator_lists(&[], Blocklist::parse("K5ARH\n"), NotchList::default());
+        v.ingest(&DecoderEvent::SpeedUpdate {
+            track_id: 1,
+            wpm: 60.0,
+        });
         let spots = v.ingest(&DecoderEvent::TrackClosed {
             track_id: 1,
             closure: ClosureKind::SignalEnded,
