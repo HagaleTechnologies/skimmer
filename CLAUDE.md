@@ -72,6 +72,11 @@ line per track and `SPOT:` lines on stdout; with a `[server]` table decoded
 text is off unless `--decoded-text` — see
 docs/DECISIONS/2026-10-10-man123-grouped-decoded-text.md.
 
+MAN-125: `manta devices` lists audio inputs and optional Soapy selectors;
+`manta check [SOURCE]` reports stream rate, input power and passband noise
+floor without decoding or services. See
+`docs/DECISIONS/2026-10-10-man125-source-diagnostics.md`.
+
 ## Documents (read in this order)
 
 - `README.md` — goals and non-goals
