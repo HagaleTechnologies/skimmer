@@ -2,6 +2,8 @@
 //! WAV layout: 2 channels, ch0 = I, ch1 = Q; Float32 or Int16.
 //! Center frequency comes from a JSON sidecar `<stem>.json`.
 
+pub mod devices;
+
 pub mod audio;
 pub use audio::{AudioIqSource, AUDIO_PASSBAND_HI_HZ, AUDIO_PASSBAND_LO_HZ, TARGET_RATE_HZ};
 

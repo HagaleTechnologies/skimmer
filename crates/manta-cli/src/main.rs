@@ -8,12 +8,19 @@ use manta_engine::{decode_wav, PipelineConfig};
 use manta_input::IqSource;
 use std::path::{Path, PathBuf};
 
+mod bench;
 mod build_info;
 mod calibrate_cmd;
 mod config;
 mod config_cmd;
+<<<<<<< HEAD
 mod config_edit;
+=======
+mod devices;
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
 mod reconnect;
+mod source_check;
+mod text_lines;
 use reconnect::ReconnectingSource;
 
 #[derive(Parser)]
@@ -45,6 +52,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List audio inputs and available SDR devices.
+    Devices {
+        /// Print one JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read a short source sample and report its level without decoding.
+    #[command(
+        long_about = "Read a short source sample and report its level without decoding. SOURCE is an audio WAV path, equivalent to --source PATH; use --source-iq for complex IQ. Without a selector, use the configured input or default audio input. The sampling deadline is duration + 5 seconds after opening, checked between reads. Native open/read calls can exceed it."
+    )]
+    Check(source_check::Args),
     /// Decode CW from a recorded IQ WAV file.
     ///
     /// Reads a stereo WAV file (channel 0 = I, channel 1 = Q), decodes the
@@ -152,9 +170,11 @@ enum Command {
     /// Decode CW live from a receiver or sound card, or run the spotting
     /// daemon.
     ///
-    /// Prints each decode as it happens. With --config, also runs the full
-    /// spotting daemon: the telnet cluster server, the JSON Lines /
-    /// WebSocket stream, and the metrics endpoint.
+    /// Prints a SPOT: line on stdout for each confirmed spot, and decoded
+    /// text on stderr, one line per track. With --config, also runs the
+    /// full spotting daemon: the telnet cluster server, the JSON Lines /
+    /// WebSocket stream, and the metrics endpoint; decoded text is then
+    /// off unless --decoded-text is given.
     // `run` is the daemon entry point; `listen` stays as a visible alias
     // for ad hoc audio/dev testing (D11/MAN-77, see
     // docs/DECISIONS/2026-09-06-broad-review-decisions.md).
@@ -291,6 +311,15 @@ enum Command {
         /// plain text.
         #[arg(long, help_heading = "Output")]
         json: bool,
+        /// Also print decoded text while the spotting daemon runs.
+        ///
+        /// Decoded text goes to stderr, one line per track, labelled with
+        /// the track number, frequency and speed. It is printed by default,
+        /// except when a `[server]` table starts the spotting daemon, so
+        /// that a service log holds spots and diagnostics only. This flag
+        /// prints it there too.
+        #[arg(long, conflicts_with = "json", help_heading = "Output")]
+        decoded_text: bool,
         /// TOML config file that turns this into the full spotting daemon.
         ///
         /// Needs a `[server]` table with the station callsign and ports.
@@ -873,6 +902,28 @@ enum Command {
     /// Check or create a config file, without starting anything.
     #[command(subcommand)]
     Config(ConfigCommand),
+    /// Measure decode quality on synthetic signals, no radio needed.
+    #[command(subcommand)]
+    Bench(BenchCommand),
+}
+
+// MAN-116: `manta bench sensitivity`; see bench.rs and
+// docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md.
+#[derive(Subcommand)]
+enum BenchCommand {
+    /// Measure how recall and copy accuracy fall off as SNR drops.
+    ///
+    /// Generates synthetic CW recordings for every combination of channel
+    /// condition, speed and SNR, decodes each one with the same pipeline
+    /// `manta decode` uses, and prints a recall and character-error-rate
+    /// table. Each recording holds ten stations sending "CQ CQ DE <call>
+    /// <call> K" for its whole length. The same manta version and flags
+    /// always print the same table, so a published result can be
+    /// regenerated and checked.
+    ///
+    /// SNR is quoted the way RBN and CW Skimmer quote it: the transmitted
+    /// carrier against the noise in a 500 Hz bandwidth.
+    Sensitivity(bench::SensitivityArgs),
 }
 
 // MAN-76: `manta config check` / `manta config init`; see config_cmd.rs and
@@ -3236,6 +3287,7 @@ fn bundled_cty_warning(cty_overridden: bool, now: std::time::SystemTime) -> Opti
     ))
 }
 
+<<<<<<< HEAD
 /// Load the config (`--config`, else `MANTA_CONFIG`) with the `MANTA_*`
 /// overlay, merge the CLI over it and print the merge notes: the part of
 /// `prepare_live` that `calibrate` shares, which needs no pipeline config.
@@ -3243,6 +3295,16 @@ fn load_and_resolve(
     cli: CliOverrides,
     config_flag: Option<PathBuf>,
 ) -> Result<(Option<PathBuf>, config::Loaded, Resolved)> {
+=======
+/// Shared typed config and source resolution, with no pipeline assets or I/O.
+struct SourcePrepared {
+    config_path: Option<PathBuf>,
+    loaded: config::Loaded,
+    resolved: Resolved,
+}
+
+fn prepare_source(cli: CliOverrides, config_flag: Option<PathBuf>) -> Result<SourcePrepared> {
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
     let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
     let config_path = config_flag.or_else(|| config::config_path_from_env(&vars));
     let loaded = config::load(config_path.as_deref(), config::Env::Read(&vars))?;
@@ -3250,7 +3312,15 @@ fn load_and_resolve(
     for note in &resolved.notes {
         eprintln!("{note}");
     }
+<<<<<<< HEAD
     Ok((config_path, loaded, resolved))
+=======
+    Ok(SourcePrepared {
+        config_path,
+        loaded,
+        resolved,
+    })
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
 }
 
 fn prepare_live(
@@ -3258,7 +3328,15 @@ fn prepare_live(
     config_flag: Option<PathBuf>,
     cli_engine: Option<Engine>,
 ) -> Result<Prepared> {
+<<<<<<< HEAD
     let (config_path, loaded, resolved) = load_and_resolve(cli, config_flag)?;
+=======
+    let SourcePrepared {
+        config_path,
+        loaded,
+        resolved,
+    } = prepare_source(cli, config_flag)?;
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
     let decode = merge_cli_engine(cli_engine, loaded.decode.clone());
     let mut pipeline = build_pipeline_config(
         resolved.freq_correction_ppm,
@@ -3282,19 +3360,27 @@ fn prepare_live(
 /// `decode`/`oracle`: one stderr note naming the tables present in the file
 /// that the command does not apply (D7).
 fn note_ignored_tables(loaded: &config::Loaded, command: &str, applied: &[&str]) {
+    if let Some(note) = ignored_tables_note(loaded, command, applied) {
+        eprintln!("{note}");
+    }
+}
+
+/// The text of `note_ignored_tables`'s note, or `None` when every present
+/// table applies (`bench sensitivity` returns it instead of printing it).
+fn ignored_tables_note(loaded: &config::Loaded, command: &str, applied: &[&str]) -> Option<String> {
     let ignored: Vec<&str> = loaded
         .present
         .iter()
         .map(String::as_str)
         .filter(|t| !applied.contains(t))
         .collect();
-    if !ignored.is_empty() {
-        eprintln!(
+    (!ignored.is_empty()).then(|| {
+        format!(
             "note: {command} ignores [{}] from {}",
             ignored.join("], ["),
             loaded.origin
-        );
-    }
+        )
+    })
 }
 
 /// Resolves the address(es) `manta status` should DIAL to reach a running
@@ -3707,6 +3793,17 @@ fn invalid_status_doc(e: serde_json::Error) -> anyhow::Error {
 fn main() -> Result<()> {
     warn_deprecations();
     match Cli::parse().command {
+        Command::Devices { json } => std::process::exit(devices::run(json)?),
+        Command::Check(args) => {
+            let code = match source_check::run(args) {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("error: {error:#}");
+                    1
+                }
+            };
+            std::process::exit(code);
+        }
         Command::Decode {
             path,
             json,
@@ -3845,6 +3942,7 @@ fn main() -> Result<()> {
             source_iq,
             filters,
             json,
+            decoded_text,
             config,
             dial_freq_hz,
             replay_epoch,
@@ -4226,6 +4324,12 @@ fn main() -> Result<()> {
             // `ready: decoding` for a run that shuts down without ever
             // decoding a chunk.
             let stop_ready = stop.clone();
+            // MAN-123: decoded text is grouped per track (text_lines.rs) and
+            // goes to stderr; stdout carries spots. A daemon -- servers
+            // started from a [server] table -- logs no decoded text unless
+            // asked, so its journal holds spots and diagnostics only.
+            let print_text = !json && (spot_server.is_none() || decoded_text);
+            let mut text_lines = text_lines::TrackLines::default();
             let listen_result = manta_engine::listen_with_observers(
                 src,
                 &cfg,
@@ -4235,30 +4339,23 @@ fn main() -> Result<()> {
                     decode_latency: decode_latency.clone(),
                 },
                 |ev| {
-                    use manta_decode::events::DecoderEvent;
                     if json {
                         println!("{}", serde_json::to_string(ev).unwrap());
                         return;
                     }
-                    use std::io::Write as _;
-                    match ev {
-                        DecoderEvent::CharDecoded { glyph, .. } => {
-                            if let Some(c) = glyph.text_char() {
-                                print!("{c}");
-                                let _ = std::io::stdout().flush();
-                            }
-                        }
-                        DecoderEvent::WordBoundary { .. } => {
-                            print!(" ");
-                            let _ = std::io::stdout().flush();
-                        }
-                        _ => {}
+                    if !print_text {
+                        return;
+                    }
+                    if let Some(line) = text_lines.ingest(ev) {
+                        eprintln!("{line}");
                     }
                 },
                 // Provisional CLI-debugging text/JSON printed below is NOT
                 // the ecosystem wire contract -- that's `spot_server`
                 // (manta-server's telnet/JSON-Lines/WebSocket fan-out,
-                // ARCHITECTURE §7), fed here when --config is set.
+                // ARCHITECTURE §7), fed here when --config is set. The
+                // human `SPOT:` line is stdout's product in text mode
+                // (MAN-123); decoded text and diagnostics go to stderr.
                 |spot| {
                     if let Some(server) = &spot_server {
                         server.bus.publish(spot.clone());
@@ -4282,7 +4379,7 @@ fn main() -> Result<()> {
                         println!("{}", serde_json::json!({ "spot": spot }));
                         return;
                     }
-                    eprintln!(
+                    println!(
                         "SPOT: {} ({:?}) {:.1} Hz {:.0} dB {:.0} wpm conf={:.2}",
                         spot.callsign,
                         spot.spot_type,
@@ -4342,6 +4439,14 @@ fn main() -> Result<()> {
                     }
                 },
             );
+
+            // A source read error returns from listen without closing its
+            // tracks, so their partial lines are printed here, on both paths.
+            if print_text {
+                for line in text_lines.finish() {
+                    eprintln!("{line}");
+                }
+            }
 
             // Run the same server-shutdown sequence on BOTH the success and
             // error paths -- an SDR disconnect or WAV read failure from
@@ -4772,6 +4877,7 @@ fn main() -> Result<()> {
         })?,
         Command::Config(ConfigCommand::Check { config }) => config_cmd::check(config)?,
         Command::Config(ConfigCommand::Init { out, force }) => config_cmd::init(&out, force)?,
+        Command::Bench(BenchCommand::Sensitivity(args)) => bench::sensitivity(args)?,
     }
     Ok(())
 }
@@ -6977,22 +7083,33 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
     /// Flags with no config key, by design.
     const CLI_ONLY: &[&str] = &[
         "json",
+<<<<<<< HEAD
+=======
+        "decoded_text",
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
         "duration",
         "config",
         "path",
         "help",
         "version",
+<<<<<<< HEAD
         "reference_hz",
         "search_ppm",
         "tune_hz",
         "write",
+=======
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
     ];
 
     #[test]
     fn every_config_backed_flag_maps_to_a_key() {
         use clap::CommandFactory;
         let cli = Cli::command();
+<<<<<<< HEAD
         for name in ["run", "soak", "doctor", "decode", "calibrate"] {
+=======
+        for name in ["run", "soak", "doctor", "decode", "check"] {
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
             let sub = cli.find_subcommand(name).unwrap();
             for arg in sub.get_arguments() {
                 let id = arg.get_id().as_str();

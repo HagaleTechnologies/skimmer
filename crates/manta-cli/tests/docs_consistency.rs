@@ -161,6 +161,18 @@ fn readme_outputs_describes_shipped_servers() {
     }
 }
 
+/// MAN-123: README Outputs says where `run`'s human output goes.
+#[test]
+fn readme_outputs_says_where_run_prints_spots_and_decoded_text() {
+    let outputs = squash_whitespace(section(&doc("README.md"), "Outputs"));
+    for needle in ["stdout", "stderr", "one line per track", "--decoded-text"] {
+        assert!(
+            outputs.contains(needle),
+            "README Outputs never mentions `{needle}`"
+        );
+    }
+}
+
 /// The Status block must not list shipped work as upcoming.
 #[test]
 fn readme_status_does_not_promise_shipped_work() {
@@ -1034,6 +1046,14 @@ fn docs_describe_the_separate_metrics_bind_addr() {
             assert!(!text.contains(stale), "{rel} still says {stale:?}");
         }
     }
+}
+
+/// MAN-116: the README and ARCHITECTURE name the sensitivity benchmark so a
+/// reader can find how a sensitivity claim was produced.
+#[test]
+fn docs_name_the_sensitivity_benchmark() {
+    assert!(doc("README.md").contains("manta bench sensitivity"));
+    assert!(doc("ARCHITECTURE.md").contains("manta bench sensitivity"));
 }
 
 /// MAN-83: where `decoderVersion`'s format and the decoder-output versioning

@@ -502,11 +502,20 @@ validation (MAN-28). Dedupe (step 5) still applies.
   `[[rbn_uplink]]`, `[input]` (source type and its keys, dial frequency,
   capture rate, ppm correction), `[spot]` (watch list, blocklist and notch
   files, and `cty.dat`/`master.scp` overrides), `[detector]` (thresholds, timers, track cap) and `[decode]` —
+<<<<<<< HEAD
   read by `run`, `soak`, `doctor` and `calibrate` (`--config`, else
   `MANTA_CONFIG`) and
   by `decode`/`oracle`. Precedence is flag, then `MANTA_<TABLE>_<KEY>`
   environment variable, then file, then default; `decode` and `oracle`
   never read the environment. Unknown tables, keys and `MANTA_*` variables
+=======
+  read by `run`, `soak`, `doctor` and `check` (`--config`, else
+  `MANTA_CONFIG`) and by `decode`/`oracle`, and by `bench sensitivity`
+  (which reads only `[decode]`/`[detector]`, never the environment).
+  Precedence is flag, then `MANTA_<TABLE>_<KEY>` environment variable, then
+  file, then default; `decode` and `oracle` never read the environment.
+  Unknown tables, keys and `MANTA_*` variables
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
   are errors. `docs/SPEC-decode-core.md` §9 is the key table. Not yet
   configurable: a band plan (CW segment limits) and the
   compile-time constants SPEC §9 marks `not configurable yet`.
@@ -517,6 +526,7 @@ validation (MAN-28). Dedupe (step 5) still applies.
   scaffold with every key commented out at its default, pinned to the code
   defaults and the loader's key list by tests (MAN-76,
   `docs/DECISIONS/2026-10-07-man76-config-check-init.md`).
+<<<<<<< HEAD
   `manta calibrate` resolves `[input]` the way `doctor` does, measures the
   receiver's frequency error against a known carrier
   (`manta-dsp::carrier` estimates it, `manta-engine::calibrate` picks the
@@ -524,6 +534,18 @@ validation (MAN-28). Dedupe (step 5) still applies.
   `input.freq_correction_ppm` in place in the file it read, keeping every
   other byte, the file's mode and owner (MAN-127,
   `docs/DECISIONS/2026-10-11-man127-calibrate-command.md`).
+=======
+- **Source diagnostics (MAN-125)**: `manta devices` enumerates audio inputs
+  and, when compiled, SoapySDR selectors without opening capture streams.
+  `manta check [SOURCE]` shares typed config/source resolution and source wrappers
+  with `run`, then calls `manta_engine::check::check_source`. It drives only
+  `Channelizer` and `FloorBank`, with no detector, decoder, validator or services.
+  Input power uses real delivered IQ; noise floor summarizes raw channel
+  quartiles inside the source passband, clipped to delivered Nyquist. The
+  effective neighborhood floor used by decoding is unchanged. See
+  `docs/DECISIONS/2026-10-10-man125-source-diagnostics.md` for units, stop reasons
+  and the cooperative deadline's blocking-call limitation.
+>>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
 - **`tracing` + `tracing-subscriber` with `EnvFilter`, implemented for
   `manta-server`'s three listeners (telnet, JSON/WS, metrics)** — landed
   2026-09-03 (MAN-59, `docs/DECISIONS/2026-09-03-man59-connection-audit-logging.md`):
@@ -751,6 +773,11 @@ truth with realistic HF impairment already exists.**
   WPM/SNR envelope; criterion benches gate the CPU budget (§4).
 - End-to-end: daemon run from an IQ file must produce byte-identical spot logs
   across platforms (determinism requirement; no wall-clock in the decode path).
+- Sensitivity curve: `manta bench sensitivity` sweeps condition × WPM × SNR
+  over `manta_testkit::sensitivity` recordings (ten looped CQ stations per
+  recording, AWGN or Watterson good/poor) and reports recall/CER vs SNR in
+  500 Hz; same build and flags, same bytes
+  (`docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md`).
 
 ## 10. Concurrency model
 

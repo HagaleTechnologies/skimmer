@@ -31,9 +31,19 @@ this distills are `docs/DECISIONS/2026-09-08-first-live-rsp1b-run.md` and
 `docs/DECISIONS/2026-09-09-overnight-40m-soapy-field-test.md` — read
 those for the full evidence and reasoning.
 
+## Check sample delivery first
+
+Run `manta devices` to find an audio name or Soapy selector, then
+`manta check` with that selector or `--config manta.toml`. This measures samples
+without starting decoding. Use `doctor` next to inspect decoder activity.
+The [source diagnostics decision](../../docs/DECISIONS/2026-10-10-man125-source-diagnostics.md)
+defines the reported stream rate, dBFS floor, incomplete-input statuses and
+blocking-call limitation. These diagnostics add no new hardware acceptance
+claim to the historical findings below.
+
 ## `doctor` vs `listen` for a field test
 
-- `manta doctor --duration <secs> --json` is the right first check: bounded,
+- `manta doctor --duration <secs> --json` assesses decoding after checking sample delivery: bounded,
   self-terminating, gives a verdict from track/SNR/decode stats —
   `NoSignal` (no decoder evidence at all), `ActivityNoSnr` (a track opened
   or decoded characters, but the run ended before any `TrackMeta` landed —
