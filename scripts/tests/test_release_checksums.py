@@ -219,14 +219,71 @@ class ReleaseJobTests(unittest.TestCase):
     def test_only_the_newest_stable_tag_becomes_the_latest_release(self):
         # GitHub marks every new non-prerelease Release "Latest" unless told otherwise, so an
         # older-version tag released after a newer one would take over releases/latest.
-        self.assertEqual(with_field(publish_step(), "make_latest"), "${{ needs.validate-tag.outputs.latest }}")
-        gate = wf.job_block(wf.read(WORKFLOW), "validate-tag")
-        self.assertEqual(wf.field(wf.sub(gate, "outputs"), "latest"), "${{ steps.latest.outputs.latest }}")
-        step = wf.step_by_id(gate, "latest")
-        self.assertIsNotNone(step, "validate-tag has no step with id: latest")
-        self.assertEqual(wf.field(step, "if"), "github.event_name == 'push'")
-        self.assertIn('scripts/release-version.sh is-newest-stable "$GITHUB_REF_NAME"', executable(wf.run_body(step)),
+        self.assertEqual(with_field(publish_step(), "make_latest"), "${{ steps.latest.outputs.latest }}")
+        job = wf.job_block(wf.read(WORKFLOW), "release")
+        steps = wf.steps(job)
+        latest = index_where(steps, lambda s: wf.field(s, "id") == "latest", "recency")
+        publish = index_where(steps, lambda s: uses(s).startswith("softprops/action-gh-release@"), "Release")
+        attest = index_where(steps, lambda s: uses(s).startswith("actions/attest"), "attest")
+        checkout = index_where(steps, lambda s: uses(s).startswith("actions/checkout@"), "checkout")
+        self.assertLess(attest, checkout)
+        self.assertLess(checkout, latest)
+        self.assertEqual(latest + 1, publish, "check recency immediately before publication")
+        self.assertEqual(with_field(steps[checkout], "path"), "release-source")
+        self.assertEqual(with_field(steps[checkout], "persist-credentials"), "false")
+        self.assertEqual(with_field(steps[checkout], "sparse-checkout"), "scripts/release-version.sh")
+        self.assertEqual(wf.field(steps[latest], "working-directory"), "release-source")
+        self.assertIn('scripts/release-version.sh is-newest-stable "$GITHUB_REF_NAME"',
+                      executable(wf.run_body(steps[latest])),
                       "the same recency predicate as publish-latest's :latest write")
+
+    def test_latest_check_sees_a_tag_created_during_the_build(self):
+        # Exercise the workflow's actual recency script against a stale checkout.
+        # The remote gains a newer tag after checkout, as an overlapping build would.
+        text = wf.read(WORKFLOW)
+        release = wf.job_block(text, "release")
+        step = wf.step_by_id(release, "latest")
+        if step is None:
+            step = wf.step_by_id(wf.job_block(text, "validate-tag"), "latest")
+        self.assertIsNotNone(step)
+        with tempfile.TemporaryDirectory() as tmp:
+            seed = os.path.join(tmp, "seed")
+            remote = os.path.join(tmp, "remote.git")
+            work = os.path.join(tmp, "work")
+
+            git_env = dict(os.environ, GIT_CONFIG_COUNT="0")
+
+            def git(*args):
+                proc = subprocess.run(["git", *args], cwd=tmp, env=git_env,
+                                      capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                return proc.stdout.strip()
+
+            git("init", "-q", seed)
+            git("-C", seed, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-q", "--allow-empty", "-m", "fixture")
+            git("-C", seed, "tag", "v0.1.0")
+            git("clone", "-q", "--bare", seed, remote)
+            git("clone", "-q", remote, work)
+            os.makedirs(os.path.join(work, "scripts"))
+            shutil.copy2(os.path.join(ROOT, "scripts", "release-version.sh"),
+                         os.path.join(work, "scripts", "release-version.sh"))
+            output = os.path.join(tmp, "output")
+            env = dict(git_env, GITHUB_REF_NAME="v0.1.0", GITHUB_OUTPUT=output)
+
+            def check_latest():
+                write_file(output, b"")
+                proc = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", wf.run_body(step)],
+                                      cwd=work, env=env, capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                with open(output, encoding="utf-8") as f:
+                    return f.read().strip()
+
+            self.assertEqual(check_latest(), "latest=true")
+            git("--git-dir", remote, "tag", "v0.2.0")
+            self.assertEqual(git("-C", work, "tag", "--list"), "v0.1.0")
+            self.assertEqual(check_latest(), "latest=false",
+                             "a newer tag pushed during the build must block Latest promotion")
 
     def test_no_other_release_job_can_mint_a_signing_token(self):
         for name in RELEASE_WORKFLOWS:

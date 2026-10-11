@@ -285,9 +285,11 @@ ghcr.io/hagaletechnologies/manta:latest` install command must always hand
 users a release, never a release candidate. They are also published as
 GitHub pre-releases, so `releases/latest` (README's download links) never
 serves one (MAN-298). The same recency check decides which GitHub Release
-is "Latest": `validate-tag` runs `is-newest-stable`, and `release` passes the
-answer to `make_latest`, so a stable tag older than the newest stable tag
-publishes its Release without taking over `releases/latest`.
+is "Latest": after builds, approval and attestation, `release` refreshes tags
+and runs `is-newest-stable` immediately before passing the answer to
+`make_latest`. A tag older than the newest stable tag seen by that check
+publishes its Release without taking over `releases/latest`. A newer tag
+pushed between the check and Release creation can still race.
 
 ## The one-time GHCR visibility step
 

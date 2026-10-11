@@ -87,7 +87,6 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       image: ${{ steps.v.outputs.image }}
-      latest: ${{ steps.latest.outputs.latest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -120,21 +119,6 @@ jobs:
           RELEASE_COMMIT: ${{ github.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: scripts/check-release-ancestry.sh "$RELEASE_COMMIT" "$DEFAULT_BRANCH"
-
-      # MAN-298: GitHub marks every new non-prerelease Release "Latest" unless told
-      # otherwise, so an older-version tag released after a newer one would take over
-      # releases/latest -- README's download links. `release` passes this to make_latest.
-      # Same predicate as publish-latest's `:latest` write (pre-releases are never newest),
-      # decided here because the signing job checks out no code. The checkout above fetched
-      # every tag. A newer tag pushed after this step is the residual race MAN-65 accepted.
-      - name: May this Release become Latest?
-        id: latest
-        if: github.event_name == 'push'
-        shell: bash
-        run: |
-          set -euo pipefail
-          LATEST="$(scripts/release-version.sh is-newest-stable "$GITHUB_REF_NAME")"
-          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
 
   build:
     needs: validate-tag
@@ -619,16 +603,39 @@ jobs:
         with:
           subject-checksums: dist/SHA256SUMS
 
+      # Read only the version helper from this release's reviewed commit. Keep the
+      # checkout separate so its clean step cannot remove the downloaded archives.
+      # No builds or dependency scripts run in the signing job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: release-source
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout: scripts/release-version.sh
+          sparse-checkout-cone-mode: false
+
+      # Decide after builds, approval and attestation, immediately before publishing.
+      # Refresh tags even after checkout so an overlapping release can block promotion.
+      - name: May this Release become Latest?
+        id: latest
+        shell: bash
+        working-directory: release-source
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --prune --prune-tags origin
+          LATEST="$(scripts/release-version.sh is-newest-stable "$GITHUB_REF_NAME")"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+
       # `files: dist/*` picks up SHA256SUMS alongside the archives. GitHub prepends `body`
       # to the generated notes. MAN-298 / decision D7: keep the label until manta clears its
       # M2/M3 acceptance gates. A SemVer pre-release tag (`v0.2.0-rc.1`) is a GitHub
       # pre-release, so releases/latest -- README's download links -- never serves one, and
-      # only the newest stable tag becomes Latest (validate-tag's `latest` output).
+      # only the newest stable tag observed by the check above becomes Latest.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
           prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ needs.validate-tag.outputs.latest }}
+          make_latest: ${{ steps.latest.outputs.latest }}
           generate_release_notes: true
           body: |
             > **Pre-stability alpha, expect breakage.** manta has not cleared its own
