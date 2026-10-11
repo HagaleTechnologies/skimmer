@@ -12,11 +12,8 @@ mod bench;
 mod build_info;
 mod config;
 mod config_cmd;
-<<<<<<< HEAD
-mod logging;
-=======
 mod devices;
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
+mod logging;
 mod reconnect;
 mod source_check;
 mod text_lines;
