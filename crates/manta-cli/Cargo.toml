@@ -46,6 +46,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
 ] }
 
+# MAN-127: config_edit.rs copies the config's POSIX access ACL onto the temp
+# file it replaces the config with.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 coppa-audio = { workspace = true }
 libc = { workspace = true }

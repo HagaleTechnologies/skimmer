@@ -152,6 +152,8 @@ pub(crate) fn save_freq_correction_ppm(path: &Path, ppm: f64) -> Result<Option<f
         .with_context(|| format!("writing temp file {}", temp.display()))?;
     #[cfg(unix)]
     keep_owner(&target, &meta, &temp, ppm)?;
+    #[cfg(target_os = "linux")]
+    keep_acl(&target, &file, ppm)?;
     fs::set_permissions(&temp, meta.permissions())
         .with_context(|| format!("setting the permissions of {}", temp.display()))?;
     drop(file);
@@ -197,6 +199,65 @@ fn keep_owner(target: &Path, meta: &fs::Metadata, temp: &Path, ppm: f64) -> Resu
             literal(ppm)
         )
     })
+}
+
+/// Gives the temp file the original's POSIX access ACL, or none when the
+/// original has none. A new file takes its directory's default ACL, whose
+/// named entries the 0600 create mode masks; `set_permissions` would then
+/// unmask them, because the ACL mask is the mode's group bits. ENOTSUP means
+/// the filesystem has no POSIX ACLs; other ACL kinds, such as NFSv4's, are
+/// not copied.
+#[cfg(target_os = "linux")]
+fn keep_acl(target: &Path, temp: &fs::File, ppm: f64) -> Result<()> {
+    use std::io::Error;
+    use std::os::unix::io::AsRawFd;
+    const NAME: &std::ffi::CStr = c"system.posix_acl_access";
+    let fail = |e: Error| {
+        anyhow!(
+            "cannot keep {}'s permissions: {e}; set {KEY} = {} by hand",
+            target.display(),
+            literal(ppm)
+        )
+    };
+    let original = fs::File::open(target).map_err(fail)?;
+    let (from, to) = (original.as_raw_fd(), temp.as_raw_fd());
+    let errno = |e: &Error| e.raw_os_error().unwrap_or(0);
+    // SAFETY: a live fd, a NUL-terminated name, and a zero-length buffer,
+    // which asks for the ACL's size.
+    let len = unsafe { libc::fgetxattr(from, NAME.as_ptr(), std::ptr::null_mut(), 0) };
+    let result = if len < 0 {
+        match Error::last_os_error() {
+            e if errno(&e) == libc::ENOTSUP => Ok(()),
+            e if errno(&e) == libc::ENODATA => {
+                // SAFETY: a live fd and a NUL-terminated name.
+                match unsafe { libc::fremovexattr(to, NAME.as_ptr()) } {
+                    0 => Ok(()),
+                    _ => match Error::last_os_error() {
+                        e if errno(&e) == libc::ENODATA => Ok(()),
+                        e => Err(e),
+                    },
+                }
+            }
+            e => Err(e),
+        }
+    } else {
+        let mut acl = vec![0u8; len as usize];
+        // SAFETY: a live fd, a NUL-terminated name, and a writable buffer of
+        // `acl.len()` bytes.
+        let n = unsafe { libc::fgetxattr(from, NAME.as_ptr(), acl.as_mut_ptr().cast(), acl.len()) };
+        if n < 0 {
+            Err(Error::last_os_error())
+        } else {
+            // SAFETY: a live fd, a NUL-terminated name, and the first `n`
+            // bytes of `acl`, which fgetxattr filled.
+            match unsafe { libc::fsetxattr(to, NAME.as_ptr(), acl.as_ptr().cast(), n as usize, 0) }
+            {
+                0 => Ok(()),
+                _ => Err(Error::last_os_error()),
+            }
+        }
+    };
+    result.map_err(fail)
 }
 
 /// Gives the still-empty temp file the original's DACL. On Windows a new
@@ -464,6 +525,106 @@ mod tests {
         );
         assert_eq!(entries(&real_dir), ["manta.toml"]);
         assert_eq!(entries(dir.path()), ["link.toml", "real"]);
+    }
+
+    /// `path`'s POSIX access ACL as the kernel stores it, or `None` when it
+    /// has only mode bits.
+    #[cfg(target_os = "linux")]
+    fn access_acl(path: &Path) -> Option<Vec<u8>> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let mut buf = vec![0u8; 256];
+        // SAFETY: NUL-terminated strings and a writable buffer of its length.
+        let n = unsafe {
+            libc::getxattr(
+                path.as_ptr(),
+                c"system.posix_acl_access".as_ptr(),
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+            )
+        };
+        if n < 0 {
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ENODATA)
+            );
+            return None;
+        }
+        buf.truncate(n as usize);
+        Some(buf)
+    }
+
+    /// Sets the ACL `name` on `path` to rw- for the owner, r-- for uid 65534
+    /// and the mask, and nothing for the group and others. False when the
+    /// filesystem has no POSIX ACLs.
+    #[cfg(target_os = "linux")]
+    fn set_acl(path: &Path, name: &std::ffi::CStr) -> bool {
+        use std::os::unix::ffi::OsStrExt;
+        const UNDEFINED: u32 = u32::MAX;
+        let mut acl = 2u32.to_le_bytes().to_vec();
+        // (tag, perm, id): USER_OBJ, USER, GROUP_OBJ, MASK, OTHER.
+        for (tag, perm, id) in [
+            (0x01u16, 6u16, UNDEFINED),
+            (0x02, 4, 65534),
+            (0x04, 0, UNDEFINED),
+            (0x10, 4, UNDEFINED),
+            (0x20, 0, UNDEFINED),
+        ] {
+            acl.extend(tag.to_le_bytes());
+            acl.extend(perm.to_le_bytes());
+            acl.extend(id.to_le_bytes());
+        }
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: NUL-terminated strings and a buffer of its length.
+        let rc = unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                name.as_ptr(),
+                acl.as_ptr().cast(),
+                acl.len(),
+                0,
+            )
+        };
+        if rc == 0 {
+            return true;
+        }
+        let e = std::io::Error::last_os_error();
+        assert_eq!(e.raw_os_error(), Some(libc::ENOTSUP), "{e}");
+        false
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn save_keeps_the_posix_access_acl() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        // A plain 0640 config in a directory whose default ACL, set after
+        // the config was written, grants uid 65534 read.
+        let dir = tempfile::tempdir().unwrap();
+        let p = write(dir.path(), "manta.toml", "[input]\n");
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o640)).unwrap();
+        if !set_acl(dir.path(), c"system.posix_acl_default") {
+            eprintln!("skipped: {} has no POSIX ACLs", dir.path().display());
+            return;
+        }
+        assert_eq!(access_acl(&p), None);
+        save_freq_correction_ppm(&p, -1.42).unwrap();
+        assert_eq!(
+            access_acl(&p),
+            None,
+            "the saved config took the directory's default ACL"
+        );
+        assert_eq!(mode(&p), 0o640);
+
+        // A config with its own ACL keeps it.
+        let dir = tempfile::tempdir().unwrap();
+        let q = write(dir.path(), "manta.toml", "[input]\n");
+        assert!(set_acl(&q, c"system.posix_acl_access"));
+        let acl = access_acl(&q);
+        assert!(acl.is_some());
+        save_freq_correction_ppm(&q, -1.42).unwrap();
+        assert_eq!(access_acl(&q), acl, "the saved config lost its ACL");
+        assert_eq!(mode(&q), 0o640);
     }
 
     /// Whether `path`'s DACL is protected from inheritance, after making it
