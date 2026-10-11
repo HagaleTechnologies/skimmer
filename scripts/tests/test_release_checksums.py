@@ -1,4 +1,4 @@
-"""Tests for the release job's SHA256SUMS and build-provenance attestation (MAN-80).
+"""Tests for the release job: SHA256SUMS and provenance (MAN-80), notes and image-failure recovery (MAN-298).
 
 stdlib unittest only; workflows are read as text through test_ci_trust_boundary.py's helpers. The
 static tests pin the release job's permissions and step order; the executed tests run the job's own
@@ -49,6 +49,9 @@ ATTEST_FLAGS = (
     "--signer-workflow HagaleTechnologies/manta/.github/workflows/release-publish.yml",
 )
 EXPR = re.compile(r"\$\{\{")
+# Decision D7 (2026-09-06 broad review), MAN-298: what the notes of every release must say until
+# manta clears its M2/M3 acceptance gates. Compared lowercased and whitespace-normalised.
+D7_PHRASE = "pre-stability alpha, expect breakage"
 # gh before 2.102.0 matched --source-ref case-insensitively and --signer-workflow as a prefix
 # (GHSA-4mq3-hpgx-9cx8, GHSA-wjmr-j3rp-mh2g), so the runbook's guard must stop the verify for these.
 GH_TOO_OLD = ("2.101.9", "2.99.0", "1.150.0", "DEV")
@@ -92,6 +95,12 @@ def index_where(steps, pred, what):
     if len(found) != 1:
         raise AssertionError(f"{WORKFLOW} release job: expected one {what} step, found {len(found)}")
     return found[0]
+
+
+def publish_step():
+    """The release job's softprops/action-gh-release step."""
+    steps = release_steps()
+    return steps[index_where(steps, lambda s: uses(s).startswith("softprops/action-gh-release@"), "Release")]
 
 
 def gnu_sha256sum():
@@ -178,9 +187,18 @@ class ReleaseJobTests(unittest.TestCase):
         self.assertIsNone(wf.field(step, "if"))
 
     def test_release_upload_still_takes_all_of_dist(self):
-        steps = release_steps()
-        step = steps[index_where(steps, lambda s: uses(s).startswith("softprops/action-gh-release@"), "Release")]
-        self.assertEqual(with_field(step, "files"), "dist/*", "SHA256SUMS rides the dist/* upload")
+        self.assertEqual(with_field(publish_step(), "files"), "dist/*", "SHA256SUMS rides the dist/* upload")
+
+    def test_release_notes_open_with_the_pre_stability_label(self):
+        step = publish_step()
+        self.assertIn(D7_PHRASE, (with_field(step, "body") or "").lower(),
+                      "the Release body must carry decision D7's label")
+        self.assertEqual(with_field(step, "generate_release_notes"), "true",
+                         "the body is prepended to the generated notes")
+
+    def test_semver_prereleases_are_github_prereleases(self):
+        self.assertEqual(with_field(publish_step(), "prerelease"), "${{ contains(github.ref_name, '-') }}",
+                         "an -rc tag must not become the release that releases/latest serves")
 
     def test_no_other_release_job_can_mint_a_signing_token(self):
         for name in RELEASE_WORKFLOWS:

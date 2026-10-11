@@ -361,7 +361,10 @@ which mode each target is in at startup.
 
 ## Status
 
-Pre-1.0, and pre-first-release. What is true today:
+**Pre-stability alpha, expect breakage.** manta has not cleared its own
+M2/M3 acceptance gates ([ROADMAP.md](ROADMAP.md)), and command-line flags,
+configuration keys and output formats can change between releases before
+1.0. What is true today:
 
 - **Shipped:** the full wideband pipeline — polyphase channelizer,
   noise-floor detector, track manager, decoder pool — with five input
@@ -391,8 +394,6 @@ Pre-1.0, and pre-first-release. What is true today:
   and character error rate against SNR (500 Hz) on synthetic AWGN and
   Watterson-faded signals; the curve at landing is in
   [docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md](docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md).
-- **No tagged release yet**, so the container image above is empty until
-  the first tag.
 
 [ROADMAP.md](ROADMAP.md) has the milestone breakdown with acceptance
 criteria.

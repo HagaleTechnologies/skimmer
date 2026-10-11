@@ -186,6 +186,17 @@ fn readme_status_does_not_promise_shipped_work() {
     }
 }
 
+/// MAN-298 / decision D7: until manta clears its M2/M3 acceptance gates, the
+/// Status block says how far to trust a release.
+#[test]
+fn readme_status_says_pre_stability_alpha() {
+    let status = squash_whitespace(section(&doc("README.md"), "Status")).to_lowercase();
+    assert!(
+        status.contains("pre-stability alpha, expect breakage"),
+        "README Status must say \"pre-stability alpha, expect breakage\" (decision D7)"
+    );
+}
+
 /// Every command in the Quickstart must run on a build the reader was told
 /// to make. `--soapy-driver` needs `--features soapy`, which is in neither
 /// the default build nor any release binary.

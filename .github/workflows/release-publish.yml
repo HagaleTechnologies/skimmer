@@ -603,8 +603,21 @@ jobs:
         with:
           subject-checksums: dist/SHA256SUMS
 
-      # `files: dist/*` picks up SHA256SUMS alongside the archives.
+      # `files: dist/*` picks up SHA256SUMS alongside the archives. GitHub prepends `body`
+      # to the generated notes. MAN-298 / decision D7: keep the label until manta clears its
+      # M2/M3 acceptance gates. A SemVer pre-release tag (`v0.2.0-rc.1`) is a GitHub
+      # pre-release, so releases/latest -- README's download links -- never serves one.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
+          body: |
+            > **Pre-stability alpha, expect breakage.** manta has not cleared its own
+            > M2/M3 acceptance gates. Command-line flags, configuration keys and output
+            > formats can change between releases before 1.0.
+
+            Download the archive for your platform and `SHA256SUMS`, and check both
+            before running anything:
+            [Verifying a downloaded release](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/RUNBOOKS/release.md#verifying-a-downloaded-release).
+            Linux binaries need the ALSA runtime library (`libasound2`).
