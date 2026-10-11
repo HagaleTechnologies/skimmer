@@ -15,7 +15,8 @@ use manta_spot::{Spot, SpotType};
 /// Applied ONLY here, at the telnet/uplink wire boundary -- the JSON
 /// stream keeps the native 2500 Hz value plus an explicit `snrRefHz` (see
 /// `spot_message.rs`), and nothing inside the decode pipeline changes.
-const RBN_REF_BW_CORRECTION_DB: f32 = 6.989_7;
+/// Also used by `manta bench sensitivity` to quote its SNR axis in 500 Hz (MAN-116).
+pub const RBN_REF_BW_CORRECTION_DB: f32 = 6.989_7;
 
 fn spot_type_label(spot_type: SpotType) -> &'static str {
     match spot_type {
@@ -257,6 +258,11 @@ pub fn format_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rbn_reference_bandwidth_correction_is_ten_log_five() {
+        assert!((RBN_REF_BW_CORRECTION_DB as f64 - 10.0 * 5f64.log10()).abs() < 1e-4);
+    }
 
     /// The one live RBN line available as evidence, captured from
     /// telnet.reversebeacon.net:7000 on 2026-09-06 02:36Z and quoted verbatim

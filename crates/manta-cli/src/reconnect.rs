@@ -288,11 +288,11 @@ impl<E: ReconnectEnv> IqSource for ReconnectingSource<E> {
                     }
                     Err(e) => {
                         self.backoff = next_backoff(self.backoff, &AttemptOutcome::NeverConnected);
-                        eprintln!(
+                        crate::logging::warning(&format!(
                             "source {} reconnect attempt failed: {e:#}; retrying in {}s",
                             self.name,
                             self.backoff.as_secs()
-                        );
+                        ));
                         continue;
                     }
                 }
@@ -319,11 +319,11 @@ impl<E: ReconnectEnv> IqSource for ReconnectingSource<E> {
                             let gap = (outage.as_secs_f64() * self.fs).round() as u64;
                             self.discontinuity = Some(gap);
                             self.reopened = false;
-                            eprintln!(
+                            crate::logging::note(&format!(
                                 "source {} reconnected after {:.1}s",
                                 self.name,
                                 outage.as_secs_f64()
-                            );
+                            ));
                         }
                     }
                     self.last_ok = self.env.now();
@@ -341,11 +341,11 @@ impl<E: ReconnectEnv> IqSource for ReconnectingSource<E> {
                         totals.retire_current();
                     }
                     self.backoff = next_backoff(self.backoff, &outcome);
-                    eprintln!(
+                    crate::logging::warning(&format!(
                         "source {} lost: {e:#}; reconnecting in {}s",
                         self.name,
                         self.backoff.as_secs()
-                    );
+                    ));
                     self.report_health(false);
                 }
             }

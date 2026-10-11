@@ -34,20 +34,20 @@ timeout_seconds = 300
 
 [[environment.verify]]
 name = "clippy"
-run = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+run = ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]
 timeout_seconds = 3000
 
 [[environment.verify]]
 name = "clippy-hpsdr"
-run = ["cargo", "clippy", "-p", "manta-input", "-p", "manta-cli", "--all-targets", "--features", "hpsdr", "--", "-D", "warnings"]
+run = ["cargo", "clippy", "-p", "manta-input", "-p", "manta-cli", "--all-targets", "--features", "hpsdr", "--locked", "--", "-D", "warnings"]
 timeout_seconds = 3000
 
 [[environment.verify]]
 name = "test-hpsdr"
-run = ["cargo", "test", "-p", "manta-input", "-p", "manta-cli", "--features", "hpsdr"]
+run = ["cargo", "test", "-p", "manta-input", "-p", "manta-cli", "--features", "hpsdr", "--locked"]
 timeout_seconds = 3000
 
 [[environment.verify]]
 name = "test-workspace"
-run = ["cargo", "test", "--workspace"]
+run = ["cargo", "test", "--workspace", "--locked"]
 timeout_seconds = 3300

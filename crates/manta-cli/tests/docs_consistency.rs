@@ -161,6 +161,18 @@ fn readme_outputs_describes_shipped_servers() {
     }
 }
 
+/// MAN-123: README Outputs says where `run`'s human output goes.
+#[test]
+fn readme_outputs_says_where_run_prints_spots_and_decoded_text() {
+    let outputs = squash_whitespace(section(&doc("README.md"), "Outputs"));
+    for needle in ["stdout", "stderr", "one line per track", "--decoded-text"] {
+        assert!(
+            outputs.contains(needle),
+            "README Outputs never mentions `{needle}`"
+        );
+    }
+}
+
 /// The Status block must not list shipped work as upcoming.
 #[test]
 fn readme_status_does_not_promise_shipped_work() {
@@ -1036,6 +1048,14 @@ fn docs_describe_the_separate_metrics_bind_addr() {
     }
 }
 
+/// MAN-116: the README and ARCHITECTURE name the sensitivity benchmark so a
+/// reader can find how a sensitivity claim was produced.
+#[test]
+fn docs_name_the_sensitivity_benchmark() {
+    assert!(doc("README.md").contains("manta bench sensitivity"));
+    assert!(doc("ARCHITECTURE.md").contains("manta bench sensitivity"));
+}
+
 /// MAN-83: where `decoderVersion`'s format and the decoder-output versioning
 /// rule are decided.
 const MAN83_DECISION: &str =
@@ -1091,4 +1111,76 @@ fn architecture_section_7_describes_decoder_version() {
     for needle in ["decoderVersion", "manta-<version>+<commit>", MAN83_DECISION] {
         assert!(s7.contains(needle), "ARCHITECTURE §7 never says {needle:?}");
     }
+}
+
+// ---- MAN-124: the log's level and format controls, documented and real ----
+
+/// MAN-124: README's `## Logs` documents `RUST_LOG` as the underlying
+/// mechanism, the four flags and `NO_COLOR`.
+#[test]
+fn readme_logs_section_documents_rust_log_and_the_flags() {
+    let readme = doc("README.md");
+    let logs = squash_whitespace(section(&readme, "Logs"));
+    for needle in [
+        "RUST_LOG",
+        "-v",
+        "-q",
+        "--log-level",
+        "--log-format json",
+        "NO_COLOR",
+    ] {
+        assert!(
+            logs.contains(needle),
+            "README `## Logs` never says {needle:?}"
+        );
+    }
+}
+
+/// MAN-124: the flags README's `## Logs` names exist on `manta run`.
+#[test]
+fn readme_logs_flags_exist_in_run_help() {
+    let out = manta().args(["run", "--help"]).output().unwrap();
+    assert!(out.status.success(), "manta run --help: {:?}", out.status);
+    let help = String::from_utf8(out.stdout).unwrap();
+    for flag in ["--verbose", "--quiet", "--log-level", "--log-format"] {
+        assert!(help.contains(flag), "`manta run --help` has no {flag}");
+    }
+}
+
+/// MAN-124: the packaging guide says how to change the log level and format
+/// under each service manager.
+#[test]
+fn packaging_readme_says_how_to_change_log_level_and_format() {
+    let guide = doc("packaging/README.md");
+    let systemd = squash_whitespace(section(&guide, "Linux: systemd"));
+    for needle in ["--log-format json", "RUST_LOG"] {
+        assert!(
+            systemd.contains(needle),
+            "systemd section never says {needle:?}"
+        );
+    }
+    let launchd = squash_whitespace(section(&guide, "macOS: LaunchDaemon"));
+    assert!(
+        launchd.contains("--log-format json"),
+        "launchd section never says --log-format json"
+    );
+    let docker = squash_whitespace(section(&guide, "Docker Compose"));
+    assert!(
+        docker.contains("--log-format"),
+        "Docker section never says --log-format"
+    );
+}
+
+/// MAN-124: ARCHITECTURE.md no longer calls the log plain `fmt` output.
+#[test]
+fn architecture_logging_bullet_is_current() {
+    let arch = squash_whitespace(&doc("ARCHITECTURE.md"));
+    assert!(
+        !arch.contains("plain `fmt` output"),
+        "ARCHITECTURE.md still says plain `fmt` output"
+    );
+    assert!(
+        arch.contains("--log-format json"),
+        "ARCHITECTURE.md never says --log-format json"
+    );
 }

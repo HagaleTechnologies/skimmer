@@ -8,11 +8,16 @@ use manta_engine::{decode_wav, PipelineConfig};
 use manta_input::IqSource;
 use std::path::{Path, PathBuf};
 
+mod bench;
 mod build_info;
 mod config;
 mod config_cmd;
+mod devices;
+mod logging;
 mod reconnect;
 mod reload;
+mod source_check;
+mod text_lines;
 use reconnect::ReconnectingSource;
 
 #[derive(Parser)]
@@ -44,6 +49,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List audio inputs and available SDR devices.
+    Devices {
+        /// Print one JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read a short source sample and report its level without decoding.
+    #[command(
+        long_about = "Read a short source sample and report its level without decoding. SOURCE is an audio WAV path, equivalent to --source PATH; use --source-iq for complex IQ. Without a selector, use the configured input or default audio input. The sampling deadline is duration + 5 seconds after opening, checked between reads. Native open/read calls can exceed it."
+    )]
+    Check(source_check::Args),
     /// Decode CW from a recorded IQ WAV file.
     ///
     /// Reads a stereo WAV file (channel 0 = I, channel 1 = Q), decodes the
@@ -151,9 +167,11 @@ enum Command {
     /// Decode CW live from a receiver or sound card, or run the spotting
     /// daemon.
     ///
-    /// Prints each decode as it happens. With --config, also runs the full
-    /// spotting daemon: the telnet cluster server, the JSON Lines /
-    /// WebSocket stream, and the metrics endpoint.
+    /// Prints a SPOT: line on stdout for each confirmed spot, and decoded
+    /// text on stderr, one line per track. With --config, also runs the
+    /// full spotting daemon: the telnet cluster server, the JSON Lines /
+    /// WebSocket stream, and the metrics endpoint; decoded text is then
+    /// off unless --decoded-text is given.
     // `run` is the daemon entry point; `listen` stays as a visible alias
     // for ad hoc audio/dev testing (D11/MAN-77, see
     // docs/DECISIONS/2026-09-06-broad-review-decisions.md).
@@ -290,6 +308,15 @@ enum Command {
         /// plain text.
         #[arg(long, help_heading = "Output")]
         json: bool,
+        /// Also print decoded text while the spotting daemon runs.
+        ///
+        /// Decoded text goes to stderr, one line per track, labelled with
+        /// the track number, frequency and speed. It is printed by default,
+        /// except when a `[server]` table starts the spotting daemon, so
+        /// that a service log holds spots and diagnostics only. This flag
+        /// prints it there too.
+        #[arg(long, conflicts_with = "json", help_heading = "Output")]
+        decoded_text: bool,
         /// TOML config file that turns this into the full spotting daemon.
         ///
         /// Needs a `[server]` table with the station callsign and ports.
@@ -349,6 +376,8 @@ enum Command {
         engine: Option<Engine>,
         #[command(flatten)]
         filters: FilterOpts,
+        #[command(flatten)]
+        logging: logging::LogOpts,
     },
     /// Run the live decoder for a fixed duration as a stability check.
     ///
@@ -690,6 +719,28 @@ enum Command {
     /// Check or create a config file, without starting anything.
     #[command(subcommand)]
     Config(ConfigCommand),
+    /// Measure decode quality on synthetic signals, no radio needed.
+    #[command(subcommand)]
+    Bench(BenchCommand),
+}
+
+// MAN-116: `manta bench sensitivity`; see bench.rs and
+// docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md.
+#[derive(Subcommand)]
+enum BenchCommand {
+    /// Measure how recall and copy accuracy fall off as SNR drops.
+    ///
+    /// Generates synthetic CW recordings for every combination of channel
+    /// condition, speed and SNR, decodes each one with the same pipeline
+    /// `manta decode` uses, and prints a recall and character-error-rate
+    /// table. Each recording holds ten stations sending "CQ CQ DE <call>
+    /// <call> K" for its whole length. The same manta version and flags
+    /// always print the same table, so a published result can be
+    /// regenerated and checked.
+    ///
+    /// SNR is quoted the way RBN and CW Skimmer quote it: the transmitted
+    /// carrier against the noise in a 500 Hz bandwidth.
+    Sensitivity(bench::SensitivityArgs),
 }
 
 // MAN-76: `manta config check` / `manta config init`; see config_cmd.rs and
@@ -1105,11 +1156,11 @@ impl IqSource for FixedCenterFreqSource {
 /// regressing it.
 fn warn_if_audio_source_has_no_rf_reference(has_rf_aware_source: bool, dial_freq_hz: Option<f64>) {
     if !has_rf_aware_source && dial_freq_hz.is_none() {
-        eprintln!(
+        logging::warning(
             "warning: no --dial-freq-hz given for an audio source -- \
              reported frequencies are baseband offsets within the \
              audio passband, not absolute RF frequencies. Pass the \
-             rig's dial frequency, e.g. --dial-freq-hz 14030000."
+             rig's dial frequency, e.g. --dial-freq-hz 14030000.",
         );
     }
 }
@@ -2475,32 +2526,10 @@ fn start_spot_server(
     session_nonce: u128,
     cty: std::sync::Arc<manta_spot::cty::Table>,
 ) -> Result<(tokio::runtime::Runtime, SpotServer)> {
-    // MAN-59: the daemon's only durable record of connection events/
-    // rejections was the live Prometheus counters (no history, reset on
-    // restart) -- nothing to reconstruct WHAT happened or FROM WHERE
-    // after an abuse incident. `try_init` (not `init`, which panics on a
-    // second call) since this function is the sole place the daemon's
-    // Tokio runtime is constructed, but a defensive no-op on an
-    // already-initialized global subscriber costs nothing. `RUST_LOG`
-    // overrides; unset defaults to `info` -- connection/rejection events
-    // below are logged at `info`/`warn`, so an operator gets useful
-    // output with zero configuration, and can raise verbosity for deeper
-    // debugging without a code change.
-    //
-    // MAN-59 review round 6 (P1): `fmt()` writes to stdout by default,
-    // but `Command::Run --json` ALSO writes DecoderEvents/spots as
-    // JSON Lines to stdout (below) -- AGENTS.md's "file input ->
-    // byte-identical spot logs" hard requirement means any interleaved
-    // non-JSON tracing line corrupts that machine-readable stream for
-    // real consumers and breaks deterministic-replay byte-identity.
-    // stderr is a separate stream a JSON-Lines consumer never reads.
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
+    // MAN-59 connection/rejection events below are logged at `info`/
+    // `warn`. `start_spot_server` no longer installs the subscriber:
+    // `logging::init` does, at the top of `run` (MAN-124), and its module
+    // doc carries the stderr-not-stdout reasoning (MAN-59 round 6).
 
     // MAN-261: `[server]`/`[[rbn_uplink]]` arrive already parsed and
     // validated by `config::load`, before any source was opened.
@@ -3074,6 +3103,22 @@ fn bundled_cty_warning(cty_overridden: bool, now: std::time::SystemTime) -> Opti
     ))
 }
 
+/// Shared typed config and source resolution, with no pipeline assets or I/O.
+struct SourcePrepared {
+    resolved: Resolved,
+}
+
+fn prepare_source(cli: CliOverrides, config_flag: Option<PathBuf>) -> Result<SourcePrepared> {
+    let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
+    let config_path = config_flag.or_else(|| config::config_path_from_env(&vars));
+    let loaded = config::load(config_path.as_deref(), config::Env::Read(&vars))?;
+    let resolved = resolve(cli, &loaded)?;
+    for note in &resolved.notes {
+        logging::note(note);
+    }
+    Ok(SourcePrepared { resolved })
+}
+
 fn prepare_live(
     cli: CliOverrides,
     config_flag: Option<PathBuf>,
@@ -3082,14 +3127,14 @@ fn prepare_live(
     let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
     let config_path = config_flag.or_else(|| config::config_path_from_env(&vars));
     let prepared = prepare_config(cli, config_path, cli_engine, &vars)?;
+    for note in &prepared.resolved.notes {
+        logging::note(note);
+    }
     if let Some(warning) = bundled_cty_warning(
         prepared.pipeline.cty.is_some(),
         std::time::SystemTime::now(),
     ) {
-        eprintln!("{warning}");
-    }
-    for note in &prepared.resolved.notes {
-        eprintln!("{note}");
+        logging::warning(&warning);
     }
     Ok(prepared)
 }
@@ -3125,19 +3170,27 @@ fn prepare_config(
 /// `decode`/`oracle`: one stderr note naming the tables present in the file
 /// that the command does not apply (D7).
 fn note_ignored_tables(loaded: &config::Loaded, command: &str, applied: &[&str]) {
+    if let Some(note) = ignored_tables_note(loaded, command, applied) {
+        eprintln!("{note}");
+    }
+}
+
+/// The text of `note_ignored_tables`'s note, or `None` when every present
+/// table applies (`bench sensitivity` returns it instead of printing it).
+fn ignored_tables_note(loaded: &config::Loaded, command: &str, applied: &[&str]) -> Option<String> {
     let ignored: Vec<&str> = loaded
         .present
         .iter()
         .map(String::as_str)
         .filter(|t| !applied.contains(t))
         .collect();
-    if !ignored.is_empty() {
-        eprintln!(
+    (!ignored.is_empty()).then(|| {
+        format!(
             "note: {command} ignores [{}] from {}",
             ignored.join("], ["),
             loaded.origin
-        );
-    }
+        )
+    })
 }
 
 /// Resolves the address(es) `manta status` should DIAL to reach a running
@@ -3548,8 +3601,33 @@ fn invalid_status_doc(e: serde_json::Error) -> anyhow::Error {
 }
 
 fn main() -> Result<()> {
+    let result = real_main();
+    if let Err(e) = &result {
+        // MAN-124: under --log-format json the error is a log record too,
+        // not Rust's plain `Error: …` line, whatever the level filter;
+        // exit status stays 1.
+        if logging::is_json() {
+            logging::fatal(format!("{e:#}").trim_end());
+            std::process::exit(1);
+        }
+    }
+    result
+}
+
+fn real_main() -> Result<()> {
     warn_deprecations();
     match Cli::parse().command {
+        Command::Devices { json } => std::process::exit(devices::run(json)?),
+        Command::Check(args) => {
+            let code = match source_check::run(args) {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("error: {error:#}");
+                    1
+                }
+            };
+            std::process::exit(code);
+        }
         Command::Decode {
             path,
             json,
@@ -3688,11 +3766,16 @@ fn main() -> Result<()> {
             source_iq,
             filters,
             json,
+            decoded_text,
             config,
             dial_freq_hz,
             replay_epoch,
             engine,
+            logging: log_opts,
         } => {
+            // MAN-124: first, so every later stderr line of `run` (startup
+            // notes, a fatal config error) exists after the subscriber does.
+            logging::init(&log_opts);
             let FilterOpts {
                 freq_correction_ppm,
                 allowlist,
@@ -3776,11 +3859,11 @@ fn main() -> Result<()> {
                 );
             }
             if config_path.is_some() && loaded.server.is_none() {
-                eprintln!(
+                logging::note(&format!(
                     "note: {} has no [server] table; the telnet/JSON/metrics servers are not \
                      started",
                     loaded.origin
-                );
+                ));
             }
             warn_if_audio_source_has_no_rf_reference(has_rf_aware_source, dial_freq_hz);
             // MAN-78: a daemon's SIGHUP is a reload, so it must not land on
@@ -4086,10 +4169,9 @@ fn main() -> Result<()> {
                 });
             }
 
-            // Printed via `eprintln!` rather than `tracing::info!` because
-            // the subscriber is only initialized inside
-            // `start_spot_server` -- a plain `listen` (no --server-config)
-            // has no subscriber at all. Two jobs: `listen` otherwise prints
+            // A plain stderr line in text mode rather than `tracing::info!`,
+            // so `-q`/`RUST_LOG` never hide it there; under `--log-format
+            // json` it is a leveled INFO record (MAN-124). Two jobs: `listen` otherwise prints
             // nothing at startup (2026-09-05 review, lens 1 #4/#7), and it
             // is the readiness handshake `tests/signal_shutdown.rs` waits
             // for. It remains AFTER `ctrlc::set_handler`, which as of
@@ -4105,12 +4187,12 @@ fn main() -> Result<()> {
             // on SIGHUP says so; the `manta: listening;` prefix the tests
             // wait for is the same either way.
             if reload_enabled {
-                eprintln!(
+                logging::note(
                     "manta: listening; send SIGINT or SIGTERM to stop, SIGHUP to reload \
-                     [spot] lists and dry_run"
+                     [spot] lists and dry_run",
                 );
             } else {
-                eprintln!("manta: listening; send SIGINT or SIGTERM to stop");
+                logging::note("manta: listening; send SIGINT or SIGTERM to stop");
             }
             // Captured before `src` is moved into the pipeline, for the
             // readiness event below.
@@ -4129,6 +4211,12 @@ fn main() -> Result<()> {
             // `ready: decoding` for a run that shuts down without ever
             // decoding a chunk.
             let stop_ready = stop.clone();
+            // MAN-123: decoded text is grouped per track (text_lines.rs) and
+            // goes to stderr; stdout carries spots. A daemon -- servers
+            // started from a [server] table -- logs no decoded text unless
+            // asked, so its journal holds spots and diagnostics only.
+            let print_text = !json && (spot_server.is_none() || decoded_text);
+            let mut text_lines = text_lines::TrackLines::default();
             let listen_result = manta_engine::listen_with_observers(
                 src,
                 &cfg,
@@ -4139,30 +4227,27 @@ fn main() -> Result<()> {
                     operator_lists: reload_enabled.then(|| operator_lists.clone()),
                 },
                 |ev| {
-                    use manta_decode::events::DecoderEvent;
                     if json {
                         println!("{}", serde_json::to_string(ev).unwrap());
                         return;
                     }
-                    use std::io::Write as _;
-                    match ev {
-                        DecoderEvent::CharDecoded { glyph, .. } => {
-                            if let Some(c) = glyph.text_char() {
-                                print!("{c}");
-                                let _ = std::io::stdout().flush();
-                            }
+                    if !print_text {
+                        return;
+                    }
+                    if let Some(line) = text_lines.ingest(ev) {
+                        if logging::is_json() {
+                            tracing::info!(target: "manta::text", "{line}");
+                        } else {
+                            eprintln!("{line}");
                         }
-                        DecoderEvent::WordBoundary { .. } => {
-                            print!(" ");
-                            let _ = std::io::stdout().flush();
-                        }
-                        _ => {}
                     }
                 },
                 // Provisional CLI-debugging text/JSON printed below is NOT
                 // the ecosystem wire contract -- that's `spot_server`
                 // (manta-server's telnet/JSON-Lines/WebSocket fan-out,
-                // ARCHITECTURE §7), fed here when --config is set.
+                // ARCHITECTURE §7), fed here when --config is set. The
+                // human `SPOT:` line is stdout's product in text mode
+                // (MAN-123); decoded text and diagnostics go to stderr.
                 |spot| {
                     if let Some(server) = &spot_server {
                         server.bus.publish(spot.clone());
@@ -4186,7 +4271,7 @@ fn main() -> Result<()> {
                         println!("{}", serde_json::json!({ "spot": spot }));
                         return;
                     }
-                    eprintln!(
+                    println!(
                         "SPOT: {} ({:?}) {:.1} Hz {:.0} dB {:.0} wpm conf={:.2}",
                         spot.callsign,
                         spot.spot_type,
@@ -4253,6 +4338,18 @@ fn main() -> Result<()> {
             // mid-drain.
             drain_gate.close();
             stop_ready.store(true, std::sync::atomic::Ordering::Relaxed);
+
+            // A source read error returns from listen without closing its
+            // tracks, so their partial lines are printed here, on both paths.
+            if print_text {
+                for line in text_lines.finish() {
+                    if logging::is_json() {
+                        tracing::info!(target: "manta::text", "{line}");
+                    } else {
+                        eprintln!("{line}");
+                    }
+                }
+            }
 
             // Run the same server-shutdown sequence on BOTH the success and
             // error paths -- an SDR disconnect or WAV read failure from
@@ -4613,6 +4710,7 @@ fn main() -> Result<()> {
         }
         Command::Config(ConfigCommand::Check { config }) => config_cmd::check(config)?,
         Command::Config(ConfigCommand::Init { out, force }) => config_cmd::init(&out, force)?,
+        Command::Bench(BenchCommand::Sensitivity(args)) => bench::sensitivity(args)?,
     }
     Ok(())
 }
@@ -4651,10 +4749,11 @@ fn deprecations<I: IntoIterator<Item = String>>(args: I) -> Vec<Deprecation> {
     out
 }
 
-/// stderr, not `tracing::warn!`: the only `tracing_subscriber` init in this
-/// binary lives inside `start_spot_server`, so a parse-time `warn!` would be
+/// stderr, not `tracing::warn!`: this runs before `Cli::parse()`, and the
+/// only `tracing_subscriber` init in this binary (`logging::init`, MAN-124)
+/// runs after it at the top of `run`, so a parse-time `warn!` would be
 /// dropped. stderr is also the stream `--json`'s JSON Lines consumer never
-/// reads (see `start_spot_server`'s MAN-59 round-6 note), so this cannot
+/// reads (see `logging`'s MAN-59 round-6 note), so this cannot
 /// corrupt the byte-identical spot log AGENTS.md requires.
 ///
 /// Known, accepted limitation: a flag *value* that is literally the string
@@ -6816,13 +6915,92 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
         ("engine", "decode.engine"),
     ];
     /// Flags with no config key, by design.
-    const CLI_ONLY: &[&str] = &["json", "duration", "config", "path", "help", "version"];
+    const CLI_ONLY: &[&str] = &[
+        "json",
+        "decoded_text",
+        "duration",
+        "config",
+        "path",
+        "help",
+        "version",
+        "verbose",
+        "quiet",
+        "log_level",
+        "log_format",
+    ];
+
+    /// MAN-124: `run`'s `Logging` flags, parsed (or refused) by clap.
+    fn run_log_opts(extra: &[&str]) -> Result<logging::LogOpts, clap::Error> {
+        let argv = ["manta", "run"].iter().chain(extra);
+        match Cli::try_parse_from(argv)?.command {
+            Command::Run { logging, .. } => Ok(logging),
+            _ => unreachable!("parsed `run`"),
+        }
+    }
+
+    #[test]
+    fn log_level_flags_are_mutually_exclusive() {
+        use clap::error::ErrorKind;
+        for argv in [
+            &["-v", "-q"][..],
+            &["-v", "--log-level", "warn"],
+            &["-q", "--log-level", "warn"],
+        ] {
+            let err = run_log_opts(argv).expect_err("conflicting flags parsed");
+            assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "{argv:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn log_flag_values_are_a_closed_set() {
+        use clap::error::ErrorKind;
+        let err = run_log_opts(&["--log-level", "loud"]).expect_err("`loud` parsed");
+        assert_eq!(err.kind(), ErrorKind::InvalidValue, "{err}");
+        let err = run_log_opts(&["--log-format", "yaml"]).expect_err("`yaml` parsed");
+        assert_eq!(err.kind(), ErrorKind::InvalidValue, "{err}");
+    }
+
+    #[test]
+    fn log_flags_parse_on_run_and_its_listen_alias() {
+        let o = run_log_opts(&["-vv"]).unwrap();
+        assert_eq!(o.verbose, 2);
+        assert_eq!(
+            o.log_format,
+            logging::LogFormat::Text,
+            "text is the default"
+        );
+        let o = run_log_opts(&["--log-format", "json", "--log-level", "debug"]).unwrap();
+        assert_eq!(o.log_format, logging::LogFormat::Json);
+        assert_eq!(o.log_level, Some(logging::LogLevel::Debug));
+        match Cli::try_parse_from(["manta", "listen", "-q"])
+            .unwrap()
+            .command
+        {
+            Command::Run { logging, .. } => assert_eq!(logging.quiet, 1),
+            _ => panic!("`listen` is `run`'s alias"),
+        }
+    }
+
+    #[test]
+    fn log_flags_are_scoped_to_run() {
+        use clap::error::ErrorKind;
+        for argv in [
+            &["manta", "decode", "-v", "x.wav"][..],
+            &["manta", "-v", "run"],
+        ] {
+            let err = match Cli::try_parse_from(argv) {
+                Ok(_) => panic!("{argv:?} parsed"),
+                Err(err) => err,
+            };
+            assert_eq!(err.kind(), ErrorKind::UnknownArgument, "{argv:?}: {err}");
+        }
+    }
 
     #[test]
     fn every_config_backed_flag_maps_to_a_key() {
         use clap::CommandFactory;
         let cli = Cli::command();
-        for name in ["run", "soak", "doctor", "decode"] {
+        for name in ["run", "soak", "doctor", "decode", "check"] {
             let sub = cli.find_subcommand(name).unwrap();
             for arg in sub.get_arguments() {
                 let id = arg.get_id().as_str();

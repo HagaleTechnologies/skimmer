@@ -60,6 +60,23 @@ MAN-79: `--cty`/`--scp` and `[spot].cty_path`/`scp_path` override the
 vendored `cty.dat`/`master.scp` at run time. `run`/`listen`/`soak`/`doctor`/
 `config check` warn when the built-in `cty.dat` is more than 180 days old.
 See docs/DECISIONS/2026-10-10-man79-operator-cty-scp-override.md.
+MAN-124: `run`'s log is plain text off a terminal (colour only on a TTY,
+`NO_COLOR` honoured); `-v`/`-q`/`--log-level` are shorthand for `RUST_LOG`;
+`--log-format json` makes every stderr line a JSON record — see
+docs/DECISIONS/2026-10-10-man124-log-output.md.
+MAN-116: `manta bench sensitivity` produces the recall/CER-vs-SNR (500 Hz)
+table over AWGN/Watterson good/poor × WPM, deterministic per build and
+flags — see docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md.
+
+MAN-123: `run`'s plain-text mode prints decoded text on stderr grouped one
+line per track and `SPOT:` lines on stdout; with a `[server]` table decoded
+text is off unless `--decoded-text` — see
+docs/DECISIONS/2026-10-10-man123-grouped-decoded-text.md.
+
+MAN-125: `manta devices` lists audio inputs and optional Soapy selectors;
+`manta check [SOURCE]` reports stream rate, input power and passband noise
+floor without decoding or services. See
+`docs/DECISIONS/2026-10-10-man125-source-diagnostics.md`.
 
 ## Documents (read in this order)
 

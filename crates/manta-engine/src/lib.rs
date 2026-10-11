@@ -1,6 +1,7 @@
 //! M0 pipeline: WAV -> frequency estimate -> single channel -> decoder.
 //! Grows into the PFB/track-manager engine at M2 (ARCHITECTURE §4, §10).
 
+pub mod check;
 pub mod config_file;
 pub mod listen;
 pub use listen::{
