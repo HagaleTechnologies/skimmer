@@ -14,11 +14,8 @@ mod clock_check;
 mod config;
 mod config_cmd;
 mod devices;
-<<<<<<< HEAD
 mod doctor_checks;
-=======
 mod logging;
->>>>>>> 5c3c64e0d15dd23f1f34f890357312e208119611
 mod reconnect;
 mod source_check;
 mod text_lines;
@@ -6936,14 +6933,11 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
         "path",
         "help",
         "version",
-<<<<<<< HEAD
         "ntp_server",
-=======
         "verbose",
         "quiet",
         "log_level",
         "log_format",
->>>>>>> 5c3c64e0d15dd23f1f34f890357312e208119611
     ];
 
     /// MAN-124: `run`'s `Logging` flags, parsed (or refused) by clap.

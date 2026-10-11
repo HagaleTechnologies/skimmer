@@ -12,6 +12,9 @@ pub(crate) const NTP_BUDGET: Duration = Duration::from_secs(3);
 /// The shortest wait for one of a server's addresses: a satellite link's
 /// round trip, with room to spare.
 const NTP_ATTEMPT_MIN: Duration = Duration::from_secs(1);
+/// What `NTP_ATTEMPT_MIN` leaves each later address: a long terrestrial
+/// round trip.
+const NTP_ATTEMPT_RESERVE: Duration = Duration::from_millis(250);
 /// Far outside the error any working NTP client allows.
 pub(crate) const WARN_OFFSET_S: f64 = 1.0;
 /// The RBN spot line's one-minute time resolution: past it, every spot
@@ -168,9 +171,10 @@ pub(crate) fn query(server: &NtpServer, budget: Duration) -> Result<f64, String>
 }
 
 /// Tries `addrs` in order until one answers or `deadline` passes. Each
-/// address gets an even share of what is left, but at least
-/// `NTP_ATTEMPT_MIN`: a silent address cannot spend the time the ones after
-/// it need, and a slow link still has time to answer.
+/// address gets an even share of what is left, raised towards
+/// `NTP_ATTEMPT_MIN` so a slow link still has time to answer, but only as
+/// far as still leaves each later address `NTP_ATTEMPT_RESERVE`: silent
+/// addresses cannot spend the time the ones after them need.
 fn query_addrs(addrs: &[SocketAddr], budget: Duration, deadline: Instant) -> Result<f64, String> {
     let timed_out = || format!("did not answer within {}", fmt_budget(budget));
     let mut last = None;
@@ -180,7 +184,9 @@ fn query_addrs(addrs: &[SocketAddr], budget: Duration, deadline: Instant) -> Res
             break;
         }
         let left = u32::try_from(addrs.len() - i).unwrap_or(u32::MAX);
-        let attempt = (remaining / left).max(NTP_ATTEMPT_MIN).min(remaining);
+        let reserved = NTP_ATTEMPT_RESERVE.saturating_mul(left - 1);
+        let floor = NTP_ATTEMPT_MIN.min(remaining.saturating_sub(reserved));
+        let attempt = (remaining / left).max(floor);
         match query_addr(*addr, attempt) {
             Ok(offset) => return Ok(offset),
             Err(Some(e)) => last = Some(e),
@@ -629,6 +635,18 @@ mod tests {
         let slow: SocketAddr = (Ipv4Addr::LOCALHOST, server.port).into();
         let budget = Duration::from_secs(2);
         let got = query_addrs(&[slow; 4], budget, Instant::now() + budget).unwrap();
+        assert!((29.5..=30.5).contains(&got), "{got}");
+    }
+
+    #[test]
+    fn query_reaches_a_fourth_address_after_three_silent_ones() {
+        let silent: Vec<UdpSocket> = (0..3)
+            .map(|_| UdpSocket::bind("127.0.0.1:0").unwrap())
+            .collect();
+        let (_sock, server) = fake_server(30.0);
+        let mut addrs: Vec<SocketAddr> = silent.iter().map(|s| s.local_addr().unwrap()).collect();
+        addrs.push((Ipv4Addr::LOCALHOST, server.port).into());
+        let got = query_addrs(&addrs, NTP_BUDGET, Instant::now() + NTP_BUDGET).unwrap();
         assert!((29.5..=30.5).contains(&got), "{got}");
     }
 

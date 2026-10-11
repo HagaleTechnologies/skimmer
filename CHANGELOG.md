@@ -23,7 +23,6 @@ git history and `docs/DECISIONS/`.
 
 ### Added
 
-<<<<<<< HEAD
 - `manta doctor` checks the whole setup before its signal check: the config
   (`manta run`'s example-callsign and dial-frequency refusals), the audio
   library and sound-card inputs, that each `[server]` port is free, the
@@ -40,7 +39,6 @@ git history and `docs/DECISIONS/`.
   for a held port, an unreachable uplink, a clock 60 s or more off, the
   example callsign, or a missing dial frequency with `[server]`. The signal
   verdict still does not change the exit code.
-=======
 - `manta run` takes `-v`/`-vv` and `-q`/`-qq`/`-qqq` and
   `--log-level <LEVEL>`, each shorthand for `RUST_LOG=<level>` that
   overrides it, and `--log-format json`, which writes every stderr log line
@@ -51,7 +49,6 @@ git history and `docs/DECISIONS/`.
 - `manta run`'s log lines carry no colour escape codes when stderr is not a
   terminal (a file, a pipe, the journal or a container log); `NO_COLOR` is
   still honoured on a terminal (MAN-124).
->>>>>>> 5c3c64e0d15dd23f1f34f890357312e208119611
 
 ### Changed
 
