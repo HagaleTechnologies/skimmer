@@ -11,7 +11,8 @@ design rationale behind the behaviour described here.
 
 This is the desired configuration, not proof that live settings have been
 applied or rehearsals have passed. Owner activation and hosted acceptance
-remain pending; MAN-84 stays blocked until the evidence below exists.
+remain pending; the first release (MAN-298, which replaced MAN-84) waits
+until the evidence below exists.
 Local tests prove the helper and workflow wiring only.
 
 Configure and verify settings first, merge the owner-reviewed workflow,
@@ -81,18 +82,16 @@ control must be verified before a release tag or manual package-write run.
    with builds and all publication skipped. Record the run URL and failure/skip
    results. Owner deletes the tag/temporary branch after evidence capture. Never
    test using a commit that disables its own guard.
-5. **Positive approval rehearsal, coordinated with MAN-84.** The ticket mentions a
-   proposed MAN-84 rehearsal tag, but the available September artifacts do not
-   name it. Use the agreed MAN-84 tag if supplied; otherwise the fixed default is
-   a unique `v<workspace-version>-man244.rehearsal.<nonce>` prerelease on a
-   reviewed default-branch commit containing this fix. A prerelease exercises
-   version publication without changing `latest`. Before approving, observe a
-   waiting deployment and no image/Release for that tag. Confirm the run's commit
-   and passing ancestry log. The owner approves `ghcr-publish`, handles any later
-   approval prompt for `publish-latest`, and verifies the version image and GitHub
-   Release. Record every approval identity and prompt count. This is a real
-   publication; coordinate its retention/cleanup as part of MAN-84. A subsequent
-   intended stable release verifies the `latest` write after owner approval.
+5. **Positive approval rehearsal: the first release.** MAN-298 uses the
+   `v0.1.0` release itself, on a reviewed default-branch commit containing
+   this fix, rather than a throwaway pre-release: a pre-release would leave a
+   GitHub pre-release and a GHCR version tag to clean up and exercises
+   nothing `v0.1.0` does not. Before approving, observe
+   `docker-publish-release` and `release` waiting for `ghcr-publish`, and no
+   image or Release for the tag. Confirm the run's commit and passing
+   ancestry log. The owner approves `ghcr-publish`, handles any later prompt
+   for `publish-latest`, and verifies the version image, the `latest` write
+   and the GitHub Release. Record every approval identity and prompt count.
 6. **Manual path.** Dispatch once with `publish=false` on a harmless feature
    branch and confirm its package-write job waits for `ghcr-test-publish`
    approval, then builds without a push. A deliberate `publish=true` trial must
@@ -101,9 +100,9 @@ control must be verified before a release tag or manual package-write run.
 
 Do not close live acceptance on a settings screenshot alone. If rule insight
 capture, owner bypass, pending deployment or off-branch failure cannot be
-observed, preserve the pending gate and keep MAN-84 blocked. Owner-controlled
-evidence should record the actual run/actor/ref/results; it need not be committed
-by the cloud worker.
+observed, preserve the pending gate and hold the first release (MAN-298).
+Owner-controlled evidence should record the actual run/actor/ref/results; it
+need not be committed by the cloud worker.
 
 ### Rollback and trust limits
 
@@ -146,28 +145,35 @@ this change. See [the MAN-244 decision](../DECISIONS/2026-10-10-man244-release-g
      multi-arch Docker build (`push: false`) — this run never publishes
      anything; it is a build-only check of the tagged commit (it no longer
      runs on pull requests at all, since HAG-47).
-   - **`release-publish.yml`** does the real work, in order:
-     `validate-tag` (checks tag grammar and default-branch ancestry before
-     any platform build starts) → `build` (rebuilds the same five targets) →
+   - **`release-publish.yml`** does the real work: `validate-tag` (checks
+     tag grammar and default-branch ancestry before any platform build
+     starts) → `build` (rebuilds the same five targets) → two jobs side by
+     side, both in the `ghcr-publish` environment:
      `docker-publish-release` (pushes the multi-arch image to GHCR as
-     `ghcr.io/hagaletechnologies/manta:X.Y.Z`) → `publish-latest` (see
-     below) and, in parallel, `release` (writes `SHA256SUMS` over the five
+     `ghcr.io/hagaletechnologies/manta:X.Y.Z`, then `publish-latest` runs
+     after it; see below) and `release` (writes `SHA256SUMS` over the five
      build artifacts, attests their build provenance, then creates the
      GitHub Release from the archives and `SHA256SUMS`; MAN-80, see
-     "Verifying a downloaded release" below). `docker-publish-release` and
-     `publish-latest` run in the `ghcr-publish` environment. The build-only
-     workflow has the same ancestry guard before its platform builds.
+     "Verifying a downloaded release" below). The Release notes open with
+     the pre-stability label above GitHub's generated list of merged pull
+     requests. `release` does not wait for the image; see "If the image
+     publish fails" below. The build-only workflow has the same ancestry
+     guard before its platform builds.
 
    Both workflows build all five targets cold: no build cache is restored
    (MAN-243, `docs/DECISIONS/2026-10-10-man243-ci-trust-boundary.md`).
    Platform builds therefore take longer than a warm CI run. On 2026-10-05 a
    cold dispatch took 1m47s–6m11s per target, while the Docker job took
    about 24 min and still dominates.
-4. When `docker-publish-release` waits for deployment approval, the owner
-   verifies the run's commit and ancestry log, then approves `ghcr-publish`.
-   Until then, no version image or GitHub Release is published. A later
-   `publish-latest` job may request a second approval; inspect and approve
-   it too, without removing its protection. Record the actual prompt count.
+4. When `docker-publish-release` and `release` wait for deployment
+   approval, the owner verifies the run's commit and ancestry log, then
+   approves `ghcr-publish`. GitHub reviews pending deployments per
+   environment, so one approval should start both jobs; if it asks again,
+   approve that too and record it. Rejecting publishes neither the image nor
+   the Release. Until then, no version image or GitHub Release is published.
+   A later `publish-latest` job may request a second approval; inspect and
+   approve it too, without removing its protection. Record the actual prompt
+   count.
 5. Watch the `release-publish.yml` run's summary for the GHCR visibility
    warning and the `:latest`-not-updated warning — see below.
 6. **Before announcing the release, run the clean-Windows check** below
@@ -178,8 +184,55 @@ this change. See [the MAN-244 decision](../DECISIONS/2026-10-10-man244-release-g
    checks in "Verifying a downloaded release" below. The `release` job
    attests before it creates the Release, so if the attestation step
    failed, no Release exists: re-run the failed `release` job ("Re-run
-   failed jobs"; it has no deployment environment, so no new approval, and
-   the Docker jobs that already succeeded do not run again).
+   failed jobs"). It waits for `ghcr-publish` approval again; the Docker
+   jobs do not run again. Also confirm the notes open with "Pre-stability
+   alpha, expect breakage." above the generated list.
+
+## If the image publish fails
+
+The GitHub Release does not wait for the Docker image (MAN-298). Once the
+owner approves `ghcr-publish`, `docker-publish-release` and `release` run
+side by side, so a failed image push leaves the Release in place. The run
+then shows `docker-publish-release` failed, `publish-latest` skipped and
+`release` succeeded: the Release has its five archives and `SHA256SUMS`,
+and GHCR has no `:X.Y.Z` image.
+
+Do not delete or re-push the tag. The binaries are published and attested,
+and a new tag is a new release. Retry only the image publish, from the
+original run:
+
+```sh
+gh run list --repo HagaleTechnologies/manta --workflow release-publish.yml \
+    --event push --limit 5 --json databaseId,headBranch,conclusion
+gh run rerun <run-id> --failed --repo HagaleTechnologies/manta
+```
+
+Outside a clone, `gh` has no repository to default to: keep
+`--repo HagaleTechnologies/manta` on every command, or set `GH_REPO`. The
+**Re-run failed jobs** button on the run's page does the same as `--failed`.
+
+- The re-run starts `docker-publish-release` again, then `publish-latest`,
+  the job that depends on it.
+  `gh run rerun --job <job-id> --repo HagaleTechnologies/manta` also
+  re-runs the jobs that depend on the one you name (`gh`'s help calls them
+  "dependencies"). Its job ID is the `databaseId` from
+  `gh run view <run-id> --repo HagaleTechnologies/manta --json jobs`, not
+  the number in the job's browser URL.
+- `release` does not run again: it neither needs the Docker job nor is
+  needed by it, so nothing re-uploads or re-attests the archives.
+- `docker-publish-release` waits for `ghcr-publish` approval again, and so
+  does `publish-latest`.
+- A re-run uses the original commit and the original workflow file. A fix
+  merged since then is not picked up: if the failure is in the workflow or
+  the `Dockerfile`, fix it on the default branch and cut a new PATCH
+  release.
+- GitHub allows a re-run up to 30 days after the original run. After that,
+  this version stays without an image; the next release publishes its own.
+
+If `:latest` then needs repairing, copy the manifest list with
+`docker buildx imagetools create` as "If `:latest` ends up wrong" shows. Do
+not pull and push it: a single-platform Docker engine pulls only its own
+architecture, and the pushed `:latest` would lose the other one.
 
 ## Manual builds and ancestry failures
 
@@ -229,7 +282,14 @@ A pre-release tag (`v1.3.0-rc.1`) still publishes its own version tag
 (`ghcr.io/hagaletechnologies/manta:1.3.0-rc.1`) but `publish-latest`
 deliberately leaves `:latest` untouched — README's `docker run
 ghcr.io/hagaletechnologies/manta:latest` install command must always hand
-users a release, never a release candidate.
+users a release, never a release candidate. They are also published as
+GitHub pre-releases, so `releases/latest` (README's download links) never
+serves one (MAN-298). The same recency check decides which GitHub Release
+is "Latest": after builds, approval and attestation, `release` refreshes tags
+and runs `is-newest-stable` immediately before passing the answer to
+`make_latest`. A tag older than the newest stable tag seen by that check
+publishes its Release without taking over `releases/latest`. A newer tag
+pushed between the check and Release creation can still race.
 
 ## The one-time GHCR visibility step
 

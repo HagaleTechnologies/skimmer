@@ -1,4 +1,4 @@
-"""Tests for the release job's SHA256SUMS and build-provenance attestation (MAN-80).
+"""Tests for the release job: SHA256SUMS and provenance (MAN-80), notes and image-failure recovery (MAN-298).
 
 stdlib unittest only; workflows are read as text through test_ci_trust_boundary.py's helpers. The
 static tests pin the release job's permissions and step order; the executed tests run the job's own
@@ -30,6 +30,7 @@ DECISION_PATH_RE = re.compile(r"docs/DECISIONS/[0-9]{4}-[0-9]{2}-[0-9]{2}-man80-
 RUNBOOK = "docs/RUNBOOKS/release.md"
 RUNBOOK_HEADING = "## Verifying a downloaded release"
 RUNBOOK_LINK = RUNBOOK + "#verifying-a-downloaded-release"
+RETRY_HEADING = "## If the image publish fails"
 # The release's five archives, as the build matrix names them; sorted under any collation.
 ARCHIVES = (
     "manta-linux-arm64.tar.gz",
@@ -49,6 +50,9 @@ ATTEST_FLAGS = (
     "--signer-workflow HagaleTechnologies/manta/.github/workflows/release-publish.yml",
 )
 EXPR = re.compile(r"\$\{\{")
+# Decision D7 (2026-09-06 broad review), MAN-298: what the notes of every release must say until
+# manta clears its M2/M3 acceptance gates. Compared lowercased and whitespace-normalised.
+D7_PHRASE = "pre-stability alpha, expect breakage"
 # gh before 2.102.0 matched --source-ref case-insensitively and --signer-workflow as a prefix
 # (GHSA-4mq3-hpgx-9cx8, GHSA-wjmr-j3rp-mh2g), so the runbook's guard must stop the verify for these.
 GH_TOO_OLD = ("2.101.9", "2.99.0", "1.150.0", "DEV")
@@ -92,6 +96,27 @@ def index_where(steps, pred, what):
     if len(found) != 1:
         raise AssertionError(f"{WORKFLOW} release job: expected one {what} step, found {len(found)}")
     return found[0]
+
+
+def publish_step():
+    """The release job's softprops/action-gh-release step."""
+    steps = release_steps()
+    return steps[index_where(steps, lambda s: uses(s).startswith("softprops/action-gh-release@"), "Release")]
+
+
+def fenced_commands(text):
+    """Command lines of the ```sh / ```console blocks in text, `\\` continuations joined and a
+    leading `$ ` prompt dropped."""
+    commands, pending = [], ""
+    for block in re.findall(r"^```(?:sh|console)\n(.*?)^```$", text, re.M | re.S):
+        for line in block.splitlines():
+            line = line.strip()
+            if line.endswith("\\"):
+                pending += line[:-1] + " "
+                continue
+            commands.append((pending + line).removeprefix("$ "))
+            pending = ""
+    return commands
 
 
 def gnu_sha256sum():
@@ -178,9 +203,87 @@ class ReleaseJobTests(unittest.TestCase):
         self.assertIsNone(wf.field(step, "if"))
 
     def test_release_upload_still_takes_all_of_dist(self):
-        steps = release_steps()
-        step = steps[index_where(steps, lambda s: uses(s).startswith("softprops/action-gh-release@"), "Release")]
-        self.assertEqual(with_field(step, "files"), "dist/*", "SHA256SUMS rides the dist/* upload")
+        self.assertEqual(with_field(publish_step(), "files"), "dist/*", "SHA256SUMS rides the dist/* upload")
+
+    def test_release_notes_open_with_the_pre_stability_label(self):
+        step = publish_step()
+        self.assertIn(D7_PHRASE, (with_field(step, "body") or "").lower(),
+                      "the Release body must carry decision D7's label")
+        self.assertEqual(with_field(step, "generate_release_notes"), "true",
+                         "the body is prepended to the generated notes")
+
+    def test_semver_prereleases_are_github_prereleases(self):
+        self.assertEqual(with_field(publish_step(), "prerelease"), "${{ contains(github.ref_name, '-') }}",
+                         "an -rc tag must not become the release that releases/latest serves")
+
+    def test_only_the_newest_stable_tag_becomes_the_latest_release(self):
+        # GitHub marks every new non-prerelease Release "Latest" unless told otherwise, so an
+        # older-version tag released after a newer one would take over releases/latest.
+        self.assertEqual(with_field(publish_step(), "make_latest"), "${{ steps.latest.outputs.latest }}")
+        job = wf.job_block(wf.read(WORKFLOW), "release")
+        steps = wf.steps(job)
+        latest = index_where(steps, lambda s: wf.field(s, "id") == "latest", "recency")
+        publish = index_where(steps, lambda s: uses(s).startswith("softprops/action-gh-release@"), "Release")
+        attest = index_where(steps, lambda s: uses(s).startswith("actions/attest"), "attest")
+        checkout = index_where(steps, lambda s: uses(s).startswith("actions/checkout@"), "checkout")
+        self.assertLess(attest, checkout)
+        self.assertLess(checkout, latest)
+        self.assertEqual(latest + 1, publish, "check recency immediately before publication")
+        self.assertEqual(with_field(steps[checkout], "path"), "release-source")
+        self.assertEqual(with_field(steps[checkout], "persist-credentials"), "false")
+        self.assertEqual(with_field(steps[checkout], "sparse-checkout"), "scripts/release-version.sh")
+        self.assertEqual(wf.field(steps[latest], "working-directory"), "release-source")
+        self.assertIn('scripts/release-version.sh is-newest-stable "$GITHUB_REF_NAME"',
+                      executable(wf.run_body(steps[latest])),
+                      "the same recency predicate as publish-latest's :latest write")
+
+    def test_latest_check_sees_a_tag_created_during_the_build(self):
+        # Exercise the workflow's actual recency script against a stale checkout.
+        # The remote gains a newer tag after checkout, as an overlapping build would.
+        text = wf.read(WORKFLOW)
+        release = wf.job_block(text, "release")
+        step = wf.step_by_id(release, "latest")
+        if step is None:
+            step = wf.step_by_id(wf.job_block(text, "validate-tag"), "latest")
+        self.assertIsNotNone(step)
+        with tempfile.TemporaryDirectory() as tmp:
+            seed = os.path.join(tmp, "seed")
+            remote = os.path.join(tmp, "remote.git")
+            work = os.path.join(tmp, "work")
+
+            git_env = dict(os.environ, GIT_CONFIG_COUNT="0")
+
+            def git(*args):
+                proc = subprocess.run(["git", *args], cwd=tmp, env=git_env,
+                                      capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                return proc.stdout.strip()
+
+            git("init", "-q", seed)
+            git("-C", seed, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-q", "--allow-empty", "-m", "fixture")
+            git("-C", seed, "tag", "v0.1.0")
+            git("clone", "-q", "--bare", seed, remote)
+            git("clone", "-q", remote, work)
+            os.makedirs(os.path.join(work, "scripts"))
+            shutil.copy2(os.path.join(ROOT, "scripts", "release-version.sh"),
+                         os.path.join(work, "scripts", "release-version.sh"))
+            output = os.path.join(tmp, "output")
+            env = dict(git_env, GITHUB_REF_NAME="v0.1.0", GITHUB_OUTPUT=output)
+
+            def check_latest():
+                write_file(output, b"")
+                proc = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", wf.run_body(step)],
+                                      cwd=work, env=env, capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                with open(output, encoding="utf-8") as f:
+                    return f.read().strip()
+
+            self.assertEqual(check_latest(), "latest=true")
+            git("--git-dir", remote, "tag", "v0.2.0")
+            self.assertEqual(git("-C", work, "tag", "--list"), "v0.1.0")
+            self.assertEqual(check_latest(), "latest=false",
+                             "a newer tag pushed during the build must block Latest promotion")
 
     def test_no_other_release_job_can_mint_a_signing_token(self):
         for name in RELEASE_WORKFLOWS:
@@ -219,6 +322,32 @@ class OperatorDocsTests(unittest.TestCase):
         for command in (LINUX_CHECK, MACOS_CHECK) + ATTEST_FLAGS:
             with self.subTest(command=command):
                 self.assertIn(command, section)
+
+    def test_runbook_says_how_to_retry_only_the_image_publish(self):
+        text = self.read(RUNBOOK)
+        self.assertIn(RETRY_HEADING + "\n", text, f"{RUNBOOK} has no {RETRY_HEADING!r}")
+        start = text.index(RETRY_HEADING + "\n")
+        end = text.find("\n## ", start + 1)
+        section = text[start:] if end == -1 else text[start:end]
+        reruns = [c for c in fenced_commands(section) if c.startswith("gh run rerun ")]
+        self.assertTrue(any("--failed" in c for c in reruns), f"{RETRY_HEADING!r} gives no gh run rerun --failed")
+        flat = " ".join(section.split())
+        for needle in ("publish-latest", "docker buildx imagetools create"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, flat)
+
+    def test_runbook_commands_name_the_repository_and_keep_every_platform(self):
+        commands = fenced_commands(self.read(RUNBOOK))
+        repo_commands = [c for c in commands if re.match(r"gh (run|release|workflow|attestation) ", c)]
+        self.assertTrue(repo_commands)
+        for command in repo_commands:
+            with self.subTest(command=command):
+                self.assertIn("--repo HagaleTechnologies/manta", command,
+                              "gh outside a clone has no repository to default to")
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertFalse(command.startswith("docker pull "),
+                                 "a single-platform engine pulls one platform of the multi-arch image")
 
     @unittest.skipIf(shutil.which("sh") is None or shutil.which("awk") is None, "needs sh and awk")
     def test_verify_block_refuses_gh_older_than_2_102_0(self):

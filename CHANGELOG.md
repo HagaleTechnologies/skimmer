@@ -16,13 +16,22 @@ version. A PATCH release never changes decoder output. The JSON stream's
 output. See
 [docs/DECISIONS/2026-10-10-man83-build-identity-and-decoder-versioning.md](docs/DECISIONS/2026-10-10-man83-build-identity-and-decoder-versioning.md).
 
-No release has been tagged yet. Changes before this file started are in the
-git history and `docs/DECISIONS/`.
+`0.1.0` is the first tagged release; its GitHub Release notes list every
+pull request merged before it. Changes before this file started are also in
+the git history and `docs/DECISIONS/`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-11
+
+Pre-stability alpha, expect breakage: manta has not cleared its own M2/M3
+acceptance gates.
+
 ### Added
 
+- Prebuilt archives for Linux (x86-64, arm64), macOS (x86-64, arm64) and
+  Windows (x86-64) on each GitHub Release, with `SHA256SUMS` and a
+  build-provenance attestation (MAN-298).
 - `manta run` takes `-v`/`-vv` and `-q`/`-qq`/`-qqq` and
   `--log-level <LEVEL>`, each shorthand for `RUST_LOG=<level>` that
   overrides it, and `--log-format json`, which writes every stderr log line
