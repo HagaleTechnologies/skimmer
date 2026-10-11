@@ -215,6 +215,17 @@ manta config init                         # writes ./manta.toml; never replaces 
 manta config check --config manta.toml
 ```
 
+Then `manta doctor` checks the machine itself: the audio library, that the
+server ports are free, the clock against an NTP server, that each enabled
+RBN uplink target accepts a connection, and that the receiver opens and
+hears something. Each check prints `PASS`, `WARN`, `FAIL` or `SKIP` with a
+fix for every problem, and it exits 1 when a check fails. See
+[docs/RUNBOOKS/setup-checks.md](docs/RUNBOOKS/setup-checks.md).
+
+```sh
+manta doctor --config manta.toml
+```
+
 Start the server in one terminal. It runs in the foreground until you stop it:
 
 ```sh

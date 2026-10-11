@@ -5,6 +5,7 @@
 
 use crate::config::{Loaded, SourceFromFile};
 use anyhow::{bail, Context, Result};
+use manta_server::config::ServerConfig;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -16,7 +17,7 @@ pub(crate) const DEFAULT_PATH: &str = "manta.toml";
 pub(crate) const SCAFFOLD: &str = include_str!("config_init.toml");
 
 /// The callsign the scaffold shows where a real one belongs (D10).
-const EXAMPLE_CALLSIGN: &str = "N0CALL";
+pub(crate) const EXAMPLE_CALLSIGN: &str = "N0CALL";
 
 /// Where `check` found the file it checked (D2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,24 +131,34 @@ fn reject_placeholders(loaded: &Loaded) -> Result<()> {
 /// source flag replaces `[input]` and its unused placeholders. See
 /// docs/DECISIONS/2026-10-10-man268-unattended-packaging.md.
 pub(crate) fn reject_example_callsigns(loaded: &Loaded) -> Result<()> {
+    match example_callsign_key(loaded) {
+        Some(key) => Err(example_callsign(loaded, key)),
+        None => Ok(()),
+    }
+}
+
+/// The first identity key still holding the example callsign, as `run`
+/// checks them. Shared with `manta doctor`'s `config` check (MAN-126), so
+/// the two cannot drift.
+pub(crate) fn example_callsign_key(loaded: &Loaded) -> Option<&'static str> {
     if let Some(server) = &loaded.server {
         if server
             .station_callsign
             .eq_ignore_ascii_case(EXAMPLE_CALLSIGN)
         {
-            return Err(example_callsign(loaded, "server.station_callsign"));
+            return Some("server.station_callsign");
         }
     }
-    for uplink in &loaded.rbn_uplink {
-        if uplink
-            .login_callsign
-            .as_deref()
-            .is_some_and(|c| c.eq_ignore_ascii_case(EXAMPLE_CALLSIGN))
-        {
-            return Err(example_callsign(loaded, "rbn_uplink.login_callsign"));
-        }
-    }
-    Ok(())
+    loaded
+        .rbn_uplink
+        .iter()
+        .any(|uplink| {
+            uplink
+                .login_callsign
+                .as_deref()
+                .is_some_and(|c| c.eq_ignore_ascii_case(EXAMPLE_CALLSIGN))
+        })
+        .then_some("rbn_uplink.login_callsign")
 }
 
 /// D10: `key` still holds the scaffold's example callsign.
@@ -189,48 +200,86 @@ fn reject_duplicate_ports(loaded: &Loaded) -> Result<()> {
     let Some(server) = &loaded.server else {
         return Ok(());
     };
-    let listeners = [
-        (
-            "telnet_port",
-            "bind_addr",
-            server.bind_addr.as_str(),
-            server.telnet_port,
-        ),
-        (
-            "json_port",
-            "bind_addr",
-            server.bind_addr.as_str(),
-            server.json_port,
-        ),
-        (
-            "metrics_port",
-            "metrics_bind_addr",
-            server.metrics_bind_addr.as_str(),
-            server.metrics_port,
-        ),
-    ];
-    for (i, (key, addr_key, addr, port)) in listeners.iter().enumerate() {
-        if *port == 0 {
-            continue;
-        }
-        let Some((first, first_addr_key, first_addr, _)) = listeners[..i]
-            .iter()
-            .find(|(_, _, a, p)| p == port && may_overlap(a, addr))
-        else {
+    let listeners = server_listeners(server);
+    for (i, l) in listeners.iter().enumerate() {
+        let Some(first) = duplicate_of(&listeners, i) else {
             continue;
         };
-        let overlap = if addr == first_addr {
+        let overlap = if l.addr == first.addr {
             String::new()
         } else {
-            format!(", and {addr_key} \"{addr}\" overlaps {first_addr_key} \"{first_addr}\"")
+            format!(
+                ", and {} \"{}\" overlaps {} \"{}\"",
+                l.addr_key, l.addr, first.addr_key, first.addr
+            )
         };
         bail!(
-            "{}: [server]: {key} {port} is the same as {first}{overlap}; each server needs its \
-             own port",
-            loaded.origin
+            "{}: [server]: {} {} is the same as {}{overlap}; each server needs its own port",
+            loaded.origin,
+            l.port_key,
+            l.port,
+            first.port_key
         );
     }
     Ok(())
+}
+
+/// One `[server]` listener: what `run` binds, and the keys that set it.
+/// MAN-132: telnet and JSON share `bind_addr`, metrics has its own
+/// `metrics_bind_addr`.
+pub(crate) struct Listener {
+    /// `telnet`, `json` or `metrics`.
+    pub name: &'static str,
+    pub port_key: &'static str,
+    pub addr_key: &'static str,
+    pub addr: String,
+    pub port: u16,
+}
+
+/// `[server]`'s three listeners, in the order `run` binds them.
+pub(crate) fn server_listeners(server: &ServerConfig) -> [Listener; 3] {
+    let listener = |name, port_key, addr_key, addr: &str, port| Listener {
+        name,
+        port_key,
+        addr_key,
+        addr: addr.to_string(),
+        port,
+    };
+    [
+        listener(
+            "telnet",
+            "telnet_port",
+            "bind_addr",
+            &server.bind_addr,
+            server.telnet_port,
+        ),
+        listener(
+            "json",
+            "json_port",
+            "bind_addr",
+            &server.bind_addr,
+            server.json_port,
+        ),
+        listener(
+            "metrics",
+            "metrics_port",
+            "metrics_bind_addr",
+            &server.metrics_bind_addr,
+            server.metrics_port,
+        ),
+    ]
+}
+
+/// D3: the earlier listener that `listeners[i]` can never bind beside --
+/// one non-zero port on overlapping addresses.
+pub(crate) fn duplicate_of(listeners: &[Listener], i: usize) -> Option<&Listener> {
+    let l = &listeners[i];
+    if l.port == 0 {
+        return None;
+    }
+    listeners[..i]
+        .iter()
+        .find(|first| first.port == l.port && may_overlap(&first.addr, &l.addr))
 }
 
 /// Whether two listeners on one port could fail to both bind. Only two

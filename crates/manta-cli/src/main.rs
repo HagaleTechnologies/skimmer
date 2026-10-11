@@ -10,9 +10,11 @@ use std::path::{Path, PathBuf};
 
 mod bench;
 mod build_info;
+mod clock_check;
 mod config;
 mod config_cmd;
 mod devices;
+mod doctor_checks;
 mod logging;
 mod reconnect;
 mod source_check;
@@ -554,12 +556,16 @@ enum Command {
         #[arg(long, default_value_t = 5)]
         timeout_secs: u64,
     },
-    /// Check whether a source is hearing anything, and say what it found.
+    /// Check that this machine is ready to run manta, then whether the
+    /// receiver hears anything.
     ///
-    /// Runs the real decode pipeline for --duration seconds, then reports
-    /// track, SNR and spot counts plus a verdict. Tells "nothing is coming
-    /// in" apart from "signal is coming in but nothing decodes" and from
-    /// "working end to end" -- which a quiet `listen` run cannot.
+    /// First checks the config, the audio library, that the server ports
+    /// are free, the clock against an NTP server, and that each enabled RBN
+    /// uplink target accepts a connection. Then opens the receiver, runs the
+    /// real decode pipeline for --duration seconds and reports track, SNR
+    /// and spot counts plus a verdict. Each check prints PASS, WARN, FAIL or
+    /// SKIP, with a fix for every problem. Exits 1 when a check fails.
+    // MAN-126: the setup checks live in doctor_checks.rs and clock_check.rs.
     Doctor {
         /// How long to listen for, in seconds (3 to 3600).
         #[arg(long, default_value_t = 10)]
@@ -701,9 +707,22 @@ enum Command {
         ///
         /// Falls back to $MANTA_CONFIG. Flags override the file, and
         /// MANTA_<TABLE>_<KEY> environment variables sit between the two.
-        /// `doctor` never starts the spot servers.
+        /// doctor checks [server]'s ports and each [[rbn_uplink]] target,
+        /// but never starts a server or logs in to a collector.
         #[arg(long)]
         config: Option<PathBuf>,
+        /// NTP server the clock check asks for the time, as HOST or
+        /// HOST:PORT.
+        ///
+        /// doctor sends it one time request over UDP port 123. Name a server
+        /// on your own network when outbound NTP is blocked.
+        #[arg(
+            long,
+            default_value = clock_check::DEFAULT_NTP_SERVER,
+            value_parser = clock_check::parse_ntp_server,
+            help_heading = "Setup checks"
+        )]
+        ntp_server: clock_check::NtpServer,
         /// Print the full report as one JSON object instead of a readable
         /// summary.
         #[arg(long, help_heading = "Output")]
@@ -3015,6 +3034,59 @@ fn spec_from_file(source: &config::SourceFromFile, cli_source_iq: bool) -> Resul
     })
 }
 
+/// `run`'s dial guard (MAN-34): with `[server]`, a receiver that reports no
+/// real RF frequency needs a dial frequency, or every spot is a baseband
+/// offset. Shared with `manta doctor`'s `config` check (MAN-126).
+fn needs_dial_freq(has_server: bool, rf_aware: bool, dial_freq_hz: Option<f64>) -> bool {
+    has_server && !rf_aware && dial_freq_hz.is_none()
+}
+
+/// How `manta doctor` names the configured receiver. Never includes the
+/// KiwiSDR password.
+fn receiver_desc(spec: &LiveSourceSpec) -> doctor_checks::ReceiverDesc {
+    use doctor_checks::{ReceiverDesc, ReceiverKind};
+    let (kind, description) = match spec {
+        LiveSourceSpec::Kiwi(kiwi) => (
+            ReceiverKind::Kiwi,
+            format!(
+                "KiwiSDR {}:{}",
+                kiwi.host.as_deref().unwrap_or_default(),
+                kiwi.port
+            ),
+        ),
+        #[cfg(feature = "soapy")]
+        LiveSourceSpec::Soapy(soapy) => (
+            ReceiverKind::Soapy,
+            format!(
+                "SoapySDR device \"{}\"",
+                soapy.driver.as_deref().unwrap_or_default()
+            ),
+        ),
+        #[cfg(feature = "hpsdr")]
+        LiveSourceSpec::Hpsdr(hpsdr) => (
+            ReceiverKind::Hpsdr,
+            format!(
+                "HPSDR radio {}:{}",
+                hpsdr.host.as_deref().unwrap_or_default(),
+                hpsdr.port
+            ),
+        ),
+        LiveSourceSpec::AudioDevice(None) => (
+            ReceiverKind::SoundCard,
+            "the system default sound-card input".to_string(),
+        ),
+        LiveSourceSpec::AudioDevice(Some(name)) => (
+            ReceiverKind::SoundCard,
+            format!("the sound-card input matching \"{name}\""),
+        ),
+        LiveSourceSpec::File { path, .. } => (
+            ReceiverKind::File,
+            format!("the WAV file {}", path.display()),
+        ),
+    };
+    ReceiverDesc { kind, description }
+}
+
 /// `run`/`soak`/`doctor`'s shared start: load the config (`--config`, else
 /// `MANTA_CONFIG`) with the `MANTA_*` overlay, merge the CLI over it, print
 /// the merge notes, and build the pipeline config. The environment is read
@@ -3775,7 +3847,7 @@ fn real_main() -> Result<()> {
 
             // Servers start iff the resolved config has a [server] table
             // (D7); the guard runs after the load and before any source I/O.
-            if loaded.server.is_some() && !has_rf_aware_source && dial_freq_hz.is_none() {
+            if needs_dial_freq(loaded.server.is_some(), has_rf_aware_source, dial_freq_hz) {
                 bail!(
                     "--dial-freq-hz is required with --config when using a plain \
                      audio device or --source WAV file -- neither reports a real RF \
@@ -4471,6 +4543,7 @@ fn real_main() -> Result<()> {
             source_iq,
             dial_freq_hz,
             config,
+            ntp_server,
             json,
         } => {
             let FilterOpts {
@@ -4497,10 +4570,10 @@ fn real_main() -> Result<()> {
                 );
             }
             let Prepared {
+                config_path,
                 loaded,
                 resolved,
                 pipeline: cfg,
-                ..
             } = prepare_live(
                 CliOverrides {
                     device,
@@ -4539,33 +4612,87 @@ fn real_main() -> Result<()> {
                 config,
                 None,
             )?;
-            if loaded.server.is_some() {
-                eprintln!(
-                    "note: doctor does not start the spot servers; ignoring [server] from {}",
-                    loaded.origin
-                );
-            }
+            // MAN-126: named setup checks first, each printed as it is
+            // known; the receiver and signal stages become check lines too,
+            // so a failure is named rather than ending in a generic error.
             let spec = &resolved.spec;
-            warn_if_audio_source_has_no_rf_reference(spec.is_rf_aware(), resolved.dial_freq_hz);
-            let src: Box<dyn IqSource> =
-                spec.open(resolved.capture_rate_hz, resolved.dial_freq_hz)?;
-            let report = manta_engine::doctor(src, &cfg, std::time::Duration::from_secs(duration))?;
+            let rf_aware = spec.is_rf_aware();
+            let receiver = receiver_desc(spec);
+            let mut sink = doctor_checks::Sink::new(json);
+            doctor_checks::run_setup_checks(
+                &doctor_checks::SetupInputs {
+                    config_path: config_path.as_deref(),
+                    loaded: &loaded,
+                    needs_dial: needs_dial_freq(
+                        loaded.server.is_some(),
+                        rf_aware,
+                        resolved.dial_freq_hz,
+                    ),
+                    receiver: &receiver,
+                    ntp_server: &ntp_server,
+                },
+                &mut sink,
+            );
+            warn_if_audio_source_has_no_rf_reference(rf_aware, resolved.dial_freq_hz);
+            let report = match spec.open(resolved.capture_rate_hz, resolved.dial_freq_hz) {
+                Err(e) => {
+                    sink.push(doctor_checks::receiver_check(&receiver, Err(&e)));
+                    None
+                }
+                Ok(src) => {
+                    sink.push(doctor_checks::receiver_check(
+                        &receiver,
+                        Ok(src.sample_rate()),
+                    ));
+                    match manta_engine::doctor(src, &cfg, std::time::Duration::from_secs(duration))
+                    {
+                        Ok(report) => {
+                            if !json {
+                                println!();
+                                print_doctor_report(&report);
+                            }
+                            Some(report)
+                        }
+                        Err(e) => {
+                            sink.push(doctor_checks::signal_check(&e));
+                            None
+                        }
+                    }
+                }
+            };
+            let checks = sink.checks;
             if json {
                 // `verdict()` is computed, not a stored field, so a plain
                 // `serde_json::to_string(&report)` omits the command's
                 // primary health classification entirely -- merge it in as
                 // an extra key rather than making JSON consumers duplicate
                 // the classification policy themselves.
-                let mut value = serde_json::to_value(&report)?;
-                if let serde_json::Value::Object(ref mut map) = value {
+                let mut map = serde_json::Map::new();
+                if let Some(report) = &report {
+                    if let serde_json::Value::Object(fields) = serde_json::to_value(report)? {
+                        map = fields;
+                    }
                     map.insert(
                         "verdict".to_string(),
                         serde_json::to_value(report.verdict())?,
                     );
                 }
-                println!("{}", serde_json::to_string(&value)?);
+                map.insert("checks".to_string(), serde_json::to_value(&checks)?);
+                map.insert(
+                    "checks_status".to_string(),
+                    serde_json::to_value(doctor_checks::worst(&checks))?,
+                );
+                println!("{}", serde_json::to_string(&map)?);
             } else {
-                print_doctor_report(&report);
+                println!();
+                println!("{}", doctor_checks::summary(&checks));
+            }
+            // As `manta status` does: the specific lines above are the
+            // whole story, so no generic `Error:` line follows them.
+            use std::io::Write as _;
+            std::io::stdout().flush()?;
+            if doctor_checks::worst(&checks) == doctor_checks::Status::Fail {
+                std::process::exit(1);
             }
         }
         Command::Config(ConfigCommand::Check { config }) => config_cmd::check(config)?,
@@ -4857,6 +4984,29 @@ mod tests {
         let _ = server.shutdown_tx.send(true);
         test_runtime.shutdown_timeout(std::time::Duration::from_secs(1));
     }
+    /// MAN-126: doctor's help names the clock check's server flag, the four
+    /// statuses, and the exit rule scripts rely on.
+    #[test]
+    fn doctor_help_lists_ntp_server_and_the_exit_rule() {
+        use clap::CommandFactory;
+        let mut cli = Cli::command();
+        let doctor = cli.find_subcommand_mut("doctor").unwrap();
+        let help = doctor.render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "--ntp-server",
+            "Setup checks",
+            "PASS, WARN, FAIL or SKIP",
+            "Exits 1 when a check fails",
+            "pool.ntp.org",
+        ] {
+            assert!(
+                flat.contains(needle),
+                "doctor --help lacks {needle:?}:\n{help}"
+            );
+        }
+    }
+
     #[test]
     fn help_lists_cty_and_scp_for_every_validating_command() {
         use clap::CommandFactory;
@@ -6783,6 +6933,7 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
         "path",
         "help",
         "version",
+        "ntp_server",
         "verbose",
         "quiet",
         "log_level",

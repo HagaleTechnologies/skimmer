@@ -89,6 +89,10 @@ hard-codes.
   is required with --config …`) runs after the load and before any source
   I/O, and is satisfied by `center_freq_hz` from any tier.
   `start_spot_server` takes parsed structs instead of re-reading the file.
+  *Superseded for doctor by MAN-126 D10:* `doctor` now reads `[server]` and
+  `[[rbn_uplink]]` to check their ports and targets, still starting no
+  server and logging in nowhere; see
+  [2026-10-10-man126-doctor-setup-checks](2026-10-10-man126-doctor-setup-checks.md).
 - **D8 — environment tier (`run`, `soak`, `doctor` only).** `MANTA_CONFIG`
   is the fallback for `--config`. `MANTA_<SERVER|INPUT|SPOT|DETECTOR|
   DECODE>_<KEY>` overlays the parsed document before typed parsing; values

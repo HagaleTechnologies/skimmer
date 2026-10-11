@@ -193,7 +193,10 @@ With `manta-field.service` stopped (only one process can open the SDR):
 sudo -u manta manta doctor --config /etc/manta/manta-field.toml --duration 120
 ```
 
-The verdict must be `DECODING`. A confirmed spot alone is not proof of a real signal. If the
+Every check line must be `PASS` or `SKIP` (doctor exits 0 only when no check fails; a `WARN`
+clock line still needs fixing before Stage 1, because spot times go to RBN), and the verdict must
+be `DECODING`. See [setup-checks](setup-checks.md) for each check and its fix. A confirmed spot
+alone is not proof of a real signal. If the
 verdict is anything else, or the spots look wrong, follow
 [live-hardware-field-testing](../../wiki/pages/live-hardware-field-testing.md) in order: the
 gain-is-attenuation sweep first, then the raw channelizer power check against a known carrier

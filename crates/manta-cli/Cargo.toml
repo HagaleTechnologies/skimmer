@@ -18,6 +18,8 @@ hpsdr = ["manta-input/hpsdr"]
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+# MAN-126: `manta doctor`'s audio check lists sound-card inputs.
+coppa-audio = { workspace = true }
 ctrlc = { workspace = true }
 hound = { workspace = true }
 serde_json = { workspace = true }
@@ -33,6 +35,11 @@ tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "io-ut
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# MAN-126: `manta doctor`'s clock check reads the kernel's NTP-sync state
+# with `adjtimex`, which only Linux has.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 coppa-audio = { workspace = true }

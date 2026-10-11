@@ -101,12 +101,30 @@ fn assert_rejected_before_source_io(what: &str, out: &Output, needles: &[&str]) 
     for needle in needles {
         assert!(stderr.contains(needle), "{what}: no {needle:?} in {stderr}");
     }
+    // MAN-126: `doctor` reports a source that will not open as a check
+    // line on stdout, so stdout must be clean too.
+    let stdout = String::from_utf8_lossy(&out.stdout);
     for io in ["open WAV", "No such file", "os error 2"] {
         assert!(
             !stderr.contains(io),
             "{what}: the config must be rejected before any source I/O: {stderr}"
         );
+        assert!(
+            !stdout.contains(io),
+            "{what}: the config must be rejected before any source I/O: {stdout}"
+        );
     }
+}
+
+/// A UDP port nothing answers on: `doctor --ntp-server 127.0.0.1:<it>`
+/// keeps the clock check off the internet (MAN-126).
+fn closed_ntp_server() -> String {
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    format!("127.0.0.1:{port}")
 }
 
 /// `run`, `decode`, `soak` and `doctor`, each given `--config cfg` and a
@@ -778,7 +796,8 @@ fn doctor_accepts_and_applies_dial_freq_hz_for_an_audio_source() {
     let out = manta()
         .args(["doctor", "--duration", "3", "--json", "--source"])
         .arg(&wav)
-        .args(["--dial-freq-hz", "14030000"])
+        .args(["--dial-freq-hz", "14030000", "--ntp-server"])
+        .arg(closed_ntp_server())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -2223,6 +2242,8 @@ fn doctor_reports_center_freq_hz_from_the_config_file() {
     let out = manta()
         .args(["doctor", "--duration", "3", "--json", "--config"])
         .arg(&cfg)
+        .arg("--ntp-server")
+        .arg(closed_ntp_server())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -2258,31 +2279,63 @@ fn soak_runs_from_a_config_file_source() {
     assert!(stderr.contains("SoakReport"), "stderr: {stderr}");
 }
 
-/// MAN-261 D7: `soak` and `doctor` never start the spot servers; a
-/// `[server]` table in their config earns a note instead.
+/// MAN-261 D7: `soak` never starts the spot servers; a `[server]` table in
+/// its config earns a note instead. MAN-126 D10
+/// (docs/DECISIONS/2026-10-10-man126-doctor-setup-checks.md): `doctor` now
+/// checks `[server]`'s ports instead of ignoring the table, still starting
+/// no server; every port here is 0, so each port row is a SKIP.
 #[test]
-fn soak_and_doctor_note_an_ignored_server_table() {
+fn soak_notes_an_ignored_server_table_and_doctor_checks_its_ports() {
     let dir = tempfile::tempdir().unwrap();
     v1_fixture(dir.path());
     let cfg = write_cfg(
         dir.path(),
         "manta.toml",
-        &format!("{SERVER_TOML}[input]\ntype = \"file\"\npath = \"v1.wav\"\niq = true\n"),
+        &format!(
+            "{SERVER_TOML}[input]\ntype = \"file\"\npath = \"v1.wav\"\niq = true\n\
+             center_freq_hz = 7030000.0\n"
+        ),
     );
 
-    for args in [
-        ["soak", "--duration", "2", "--config"].as_slice(),
-        ["doctor", "--duration", "3", "--json", "--config"].as_slice(),
-    ] {
-        let out = manta().args(args).arg(&cfg).output().unwrap();
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(out.status.success(), "{}: stderr: {stderr}", args[0]);
-        assert!(
-            stderr.contains("does not start the spot servers"),
-            "{}: stderr: {stderr}",
-            args[0]
-        );
-        assert!(!stderr.contains("telnet="), "{}: {stderr}", args[0]);
+    let out = manta()
+        .args(["soak", "--duration", "2", "--config"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "soak: stderr: {stderr}");
+    assert!(
+        stderr.contains("does not start the spot servers"),
+        "soak: stderr: {stderr}"
+    );
+    assert!(!stderr.contains("telnet="), "soak: {stderr}");
+
+    let out = manta()
+        .args(["doctor", "--duration", "3", "--json", "--config"])
+        .arg(&cfg)
+        .arg("--ntp-server")
+        .arg(closed_ntp_server())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "doctor: stdout: {stdout} stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("does not start the spot servers"),
+        "doctor: stderr: {stderr}"
+    );
+    assert!(!stderr.contains("telnet="), "doctor: {stderr}");
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let checks = report["checks"].as_array().unwrap();
+    for name in ["telnet port", "json port", "metrics port"] {
+        let row = checks
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("no {name} row in {report}"));
+        assert_eq!(row["status"], "skip", "{row}");
     }
 }
 

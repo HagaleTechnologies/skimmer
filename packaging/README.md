@@ -27,7 +27,10 @@ there.
   KiwiSDR and HPSDR support, not SoapySDR.
 - **Linux:** the binary needs the ALSA runtime library even when it never
   opens a sound card: `sudo apt install libasound2` on Debian, Ubuntu and
-  Raspberry Pi OS (`libasound2t64` on Debian 13).
+  Raspberry Pi OS (`libasound2t64` on Debian 13). Without it, `./manta`
+  does not start at all and the system prints
+  `error while loading shared libraries: libasound.so.2: cannot open shared object file`;
+  see [setup-checks](https://github.com/HagaleTechnologies/manta/blob/main/docs/RUNBOOKS/setup-checks.md#manta-will-not-start-at-all).
 - **macOS:** release binaries are not signed or notarized. If macOS
   refuses to run `./manta` because it was downloaded from the internet,
   clear the flag with `xattr -d com.apple.quarantine ./manta`.
@@ -82,6 +85,19 @@ JSON listen on every interface. When something is wrong it exits 1 naming
 the setting, including any `<...>` example value you uncommented but did
 not edit. It does not contact the receiver: a wrong host name or port
 shows up only when manta runs.
+
+Then check the machine and the receiver together:
+
+```sh
+./manta doctor --config manta.toml
+```
+
+It checks that the server ports are free, the clock against an NTP server,
+each enabled uplink target, and that the receiver opens and hears
+something, printing `PASS`, `WARN`, `FAIL` or `SKIP` with a fix for every
+problem, and exits 1 when a check fails. Run it before you install the
+service, not while it runs. See
+[setup-checks](https://github.com/HagaleTechnologies/manta/blob/main/docs/RUNBOOKS/setup-checks.md).
 
 **Uplinks.** Leave the `[[rbn_uplink]]` block commented out. If you enable
 an uplink later, `dry_run` defaults to `true`: it connects and logs in but
