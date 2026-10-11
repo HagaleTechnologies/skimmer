@@ -27,7 +27,20 @@ impl Blocklist {
     }
 
     pub fn contains(&self, callsign: &str) -> bool {
+        if self.is_empty() {
+            return false;
+        }
         self.calls.contains(&callsign.to_uppercase())
+    }
+
+    /// Distinct callsigns on the list, compared case-insensitively (MAN-78:
+    /// a reload logs this, so an emptied file shows as 0).
+    pub fn len(&self) -> usize {
+        self.calls.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.calls.is_empty()
     }
 }
 
@@ -59,6 +72,14 @@ w3fake
     fn unlisted_calls_are_absent() {
         let list = Blocklist::parse(FIXTURE);
         assert!(!list.contains("K5ARH"));
+    }
+
+    #[test]
+    fn blocklist_len_counts_distinct_calls_case_insensitively() {
+        let list = Blocklist::parse("W1AW\nw1aw\n# c\n\nK1BAD\n");
+        assert_eq!(list.len(), 2);
+        assert!(!list.is_empty());
+        assert!(Blocklist::default().is_empty());
     }
 
     #[test]

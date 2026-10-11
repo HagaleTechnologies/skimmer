@@ -33,7 +33,8 @@ coppa-audio = { git = "https://github.com/HagaleTechnologies/coppa.git", rev = "
 coppa-channel = { git = "https://github.com/HagaleTechnologies/coppa.git", rev = "f8a4d16df7e5776a0756943c05712038774e6c70" }
 
 cpal = "0.18"
-ctrlc = { version = "3", features = ["termination"] }
+ctrlc = "3"
+signal-hook = { version = "0.4", default-features = false, features = ["iterator"] }
 libc = "0.2"
 
 anyhow = "1.0"

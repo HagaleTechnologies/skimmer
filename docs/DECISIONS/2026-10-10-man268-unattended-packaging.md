@@ -131,7 +131,8 @@ Consequences). Operator instructions: `packaging/README.md`.
   shows as the job's last exit code. Not newsyslog: rename rotation needs
   the writer to reopen its file, manta never reopens the stdout and
   stderr it inherits, and SIGHUP, newsyslog's default signal, shuts manta
-  down (MAN-85). manta would keep writing to the renamed file, so the open
+  down (MAN-85; since MAN-78 a `[server]` daemon reloads its `[spot]`
+  lists on SIGHUP instead, which reopens no log either). manta would keep writing to the renamed file, so the open
   inode has to stay. Accepted limits, stated in the guide: the log can
   exceed 10 MiB between runs or while the job cannot run, and lines
   written during the copy can be lost. This is operational retention, not

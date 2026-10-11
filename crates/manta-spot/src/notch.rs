@@ -76,7 +76,20 @@ impl NotchList {
     }
 
     pub fn contains(&self, freq_hz: f64) -> bool {
+        if self.is_empty() {
+            return false;
+        }
         self.ranges.iter().any(|r| r.contains(freq_hz))
+    }
+
+    /// Parsed ranges; malformed lines are not counted (MAN-78: a reload
+    /// logs this).
+    pub fn len(&self) -> usize {
+        self.ranges.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
     }
 
     #[cfg(test)]
@@ -126,6 +139,14 @@ mod tests {
     fn comment_and_blank_lines_are_ignored() {
         let notch = NotchList::parse(FIXTURE);
         assert_eq!(notch.ranges().len(), 2);
+    }
+
+    #[test]
+    fn notch_len_counts_only_parsed_ranges() {
+        let notch = NotchList::parse(&format!("{FIXTURE}garbage\n"));
+        assert_eq!(notch.len(), 2);
+        assert!(!notch.is_empty());
+        assert!(NotchList::default().is_empty());
     }
 
     #[test]

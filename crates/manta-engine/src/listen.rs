@@ -8,10 +8,10 @@ use crate::PipelineConfig;
 use anyhow::Result;
 use manta_decode::events::DecoderEvent;
 use manta_input::IqSource;
-use manta_spot::Validator;
+use manta_spot::{Blocklist, NotchList, Validator};
 use num_complex::Complex32;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// One chunk read per loop iteration, in samples.
 const CHUNK_SAMPLES: usize = 2048;
@@ -48,6 +48,50 @@ pub struct ListenObservers {
     /// `None` (the default) skips both the `Instant::now()` calls and the
     /// observation entirely, so `listen()`'s existing callers pay nothing.
     pub decode_latency: Option<Arc<DecodeLatencyObserver>>,
+    /// MAN-78: the one inbound field -- replacement operator lists from a
+    /// live config reload, taken before each decoder event reaches the
+    /// running `Validator`. `None` (the default) skips the check
+    /// entirely, so `listen()`'s existing callers pay nothing.
+    pub operator_lists: Option<Arc<OperatorListsUpdate>>,
+}
+
+/// MAN-78: the operator lists a live reload replaces, as one unit.
+#[derive(Debug, Clone, Default)]
+pub struct OperatorLists {
+    pub allowlist: Vec<String>,
+    pub blocklist: Blocklist,
+    pub notch: NotchList,
+}
+
+/// MAN-78: hands replacement lists from the reload thread to the decode
+/// loop. The newest offer wins; the validator's next decoder event uses it.
+#[derive(Default)]
+pub struct OperatorListsUpdate {
+    pending: AtomicBool,
+    next: Mutex<Option<OperatorLists>>,
+}
+
+impl OperatorListsUpdate {
+    /// Stores `lists` as the next update, replacing any not yet taken.
+    pub fn offer(&self, lists: OperatorLists) {
+        // Poison-tolerant: the slot holds plain data, so a panic in another
+        // holder cannot leave it half-written.
+        let mut next = self.next.lock().unwrap_or_else(|e| e.into_inner());
+        *next = Some(lists);
+        self.pending.store(true, Ordering::Release);
+    }
+
+    /// The newest offer not yet taken, if any. A relaxed load is the whole
+    /// cost when nothing was offered.
+    pub fn take(&self) -> Option<OperatorLists> {
+        if !self.pending.load(Ordering::Relaxed) {
+            return None;
+        }
+        if !self.pending.swap(false, Ordering::Acquire) {
+            return None;
+        }
+        self.next.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
 }
 
 /// Zeroes the active-track observer on EVERY exit path out of
@@ -130,11 +174,18 @@ fn new_segment(
 fn emit(
     events: Vec<DecoderEvent>,
     validator: &mut Validator,
+    lists: Option<&OperatorListsUpdate>,
     calibration_factor: f64,
     on_event: &mut impl FnMut(&DecoderEvent),
     on_spot: &mut impl FnMut(&crate::Spot),
 ) {
     for ev in events {
+        // MAN-78: the one place the validator is fed, so the one place a
+        // reload's lists are taken, for calibration, steady state, outage
+        // and end-of-stream batches alike.
+        if let Some(l) = lists.and_then(OperatorListsUpdate::take) {
+            validator.replace_operator_lists(&l.allowlist, l.blocklist, l.notch);
+        }
         on_event(&crate::calibrate_freq_events(&ev, calibration_factor));
         for spot in validator.ingest(&ev) {
             on_spot(&spot);
@@ -310,6 +361,7 @@ pub fn listen_with_observers(
     emit(
         events,
         &mut validator,
+        observers.operator_lists.as_deref(),
         calibration_factor,
         &mut on_event,
         &mut on_spot,
@@ -324,6 +376,7 @@ pub fn listen_with_observers(
     emit(
         events,
         &mut validator,
+        observers.operator_lists.as_deref(),
         calibration_factor,
         &mut on_event,
         &mut on_spot,
@@ -365,6 +418,7 @@ pub fn listen_with_observers(
             emit(
                 finish_events,
                 &mut validator,
+                observers.operator_lists.as_deref(),
                 calibration_factor,
                 &mut on_event,
                 &mut on_spot,
@@ -379,6 +433,7 @@ pub fn listen_with_observers(
             emit(
                 events,
                 &mut validator,
+                observers.operator_lists.as_deref(),
                 calibration_factor,
                 &mut on_event,
                 &mut on_spot,
@@ -398,6 +453,7 @@ pub fn listen_with_observers(
         emit(
             events,
             &mut validator,
+            observers.operator_lists.as_deref(),
             calibration_factor,
             &mut on_event,
             &mut on_spot,
@@ -414,6 +470,7 @@ pub fn listen_with_observers(
     emit(
         events,
         &mut validator,
+        observers.operator_lists.as_deref(),
         calibration_factor,
         &mut on_event,
         &mut on_spot,
@@ -804,6 +861,221 @@ mod tests {
         };
 
         assert_eq!(run(), run(), "identical input must decode identically");
+    }
+
+    #[test]
+    fn operator_lists_update_hands_over_only_the_newest_offer() {
+        assert!(OperatorListsUpdate::default().take().is_none());
+        let update = OperatorListsUpdate::default();
+        update.offer(OperatorLists {
+            allowlist: vec!["A".into()],
+            ..OperatorLists::default()
+        });
+        update.offer(OperatorLists {
+            allowlist: vec!["B".into()],
+            ..OperatorLists::default()
+        });
+        assert_eq!(update.take().unwrap().allowlist, vec!["B".to_string()]);
+        assert!(update.take().is_none());
+    }
+
+    /// Vector v7 through `listen_with_observers`, offering `lists` from
+    /// `on_spot` the first time N2BB spots (sample 1,407,232; N1AA follows
+    /// at 1,555,968, a later chunk). Returns every spotted callsign.
+    fn v7_with_lists_offered_at_n2bb(cfg: &PipelineConfig, lists: OperatorLists) -> Vec<String> {
+        let spec = manta_testkit::vectors::v7();
+        let rendered = manta_testkit::vectors::render(&spec).unwrap();
+        let src: Box<dyn manta_input::IqSource> = Box::new(FixedFreqSource {
+            samples: rendered.samples,
+            cursor: 0,
+            fs: spec.fs,
+            center_freq_hz: spec.center_freq_hz,
+        });
+        let update = Arc::new(OperatorListsUpdate::default());
+        let observers = ListenObservers {
+            operator_lists: Some(update.clone()),
+            ..ListenObservers::default()
+        };
+        let mut lists = Some(lists);
+        let mut spots = Vec::new();
+        listen_with_observers(
+            src,
+            cfg,
+            Arc::new(AtomicBool::new(false)),
+            observers,
+            |_ev| {},
+            |spot| {
+                if spot.callsign == "N2BB" {
+                    if let Some(l) = lists.take() {
+                        update.offer(l);
+                    }
+                }
+                spots.push(spot.callsign.clone());
+            },
+            |_n| {},
+        )
+        .unwrap();
+        spots
+    }
+
+    fn v7_spots(cfg: &PipelineConfig) -> Vec<String> {
+        let spec = manta_testkit::vectors::v7();
+        let rendered = manta_testkit::vectors::render(&spec).unwrap();
+        let src: Box<dyn manta_input::IqSource> = Box::new(FixedFreqSource {
+            samples: rendered.samples,
+            cursor: 0,
+            fs: spec.fs,
+            center_freq_hz: spec.center_freq_hz,
+        });
+        let mut spots = Vec::new();
+        listen(
+            src,
+            cfg,
+            Arc::new(AtomicBool::new(false)),
+            |_ev| {},
+            |spot| spots.push(spot.callsign.clone()),
+        )
+        .unwrap();
+        spots
+    }
+
+    /// Offers replacement lists from inside a read, including the EOF read.
+    struct OfferingSource {
+        inner: FixedFreqSource,
+        update: Arc<OperatorListsUpdate>,
+        offer_at: Option<u64>,
+        reads: Arc<AtomicU64>,
+    }
+
+    impl IqSource for OfferingSource {
+        fn sample_rate(&self) -> f64 {
+            self.inner.sample_rate()
+        }
+
+        fn center_freq_hz(&self) -> f64 {
+            self.inner.center_freq_hz()
+        }
+
+        fn read(&mut self, buf: &mut [Complex32]) -> Result<usize> {
+            let k = self.reads.fetch_add(1, Ordering::Relaxed) + 1;
+            if self.offer_at == Some(k) {
+                self.update.offer(OperatorLists {
+                    allowlist: vec!["W1AW".into()],
+                    blocklist: Blocklist::parse("W1AW\n"),
+                    ..Default::default()
+                });
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    fn fast_w1aw(
+        wpm: f32,
+        truncate: Option<usize>,
+        offer_at: Option<u64>,
+    ) -> (Vec<(String, u64)>, u64) {
+        let mut spec = manta_testkit::vectors::v1();
+        spec.duration_s = 3.0;
+        spec.signals[0].wpm = wpm;
+        spec.signals[0].text = "W1AW W1AW W1AW W1AW W1AW".into();
+        let mut samples = manta_testkit::vectors::render(&spec).unwrap().samples;
+        if let Some(n) = truncate {
+            samples.truncate(n);
+        }
+        let update = Arc::new(OperatorListsUpdate::default());
+        let reads = Arc::new(AtomicU64::new(0));
+        let src = OfferingSource {
+            inner: FixedFreqSource {
+                samples,
+                cursor: 0,
+                fs: spec.fs,
+                center_freq_hz: spec.center_freq_hz,
+            },
+            update: update.clone(),
+            offer_at,
+            reads: reads.clone(),
+        };
+        let mut cfg = PipelineConfig {
+            allowlist: vec!["W1AW".into()],
+            ..Default::default()
+        };
+        cfg.detector.warmup_hops = 0;
+        let mut spots = Vec::new();
+        listen_with_observers(
+            Box::new(src),
+            &cfg,
+            Arc::new(AtomicBool::new(false)),
+            ListenObservers {
+                operator_lists: Some(update),
+                ..Default::default()
+            },
+            |_| {},
+            |s| spots.push((s.callsign.clone(), reads.load(Ordering::Relaxed))),
+            |_| {},
+        )
+        .unwrap();
+        (spots, reads.load(Ordering::Relaxed))
+    }
+
+    #[test]
+    fn lists_offered_during_calibration_apply_to_the_calibration_buffer() {
+        let (control, _) = fast_w1aw(72.0, None, None);
+        assert_eq!(control, vec![("W1AW".to_string(), 1)]);
+        let (spots, _) = fast_w1aw(72.0, None, Some(1));
+        assert!(spots.is_empty(), "got {spots:?}");
+    }
+
+    #[test]
+    fn lists_offered_during_a_read_apply_to_its_chunk() {
+        let (control, _) = fast_w1aw(60.0, None, None);
+        let k = control.first().expect("control spots W1AW").1;
+        assert!(
+            k > 1,
+            "spot must come from a steady-state chunk, got {control:?}"
+        );
+        let (spots, _) = fast_w1aw(60.0, None, Some(k));
+        assert!(spots.is_empty(), "got {spots:?}");
+    }
+
+    #[test]
+    fn lists_offered_during_the_eof_read_apply_to_the_final_flush() {
+        let (control, total) = fast_w1aw(60.0, Some(205_000), None);
+        assert_eq!(control, vec![("W1AW".to_string(), total)]);
+        let (spots, _) = fast_w1aw(60.0, Some(205_000), Some(total));
+        assert!(spots.is_empty(), "got {spots:?}");
+    }
+
+    /// MAN-78: lists offered mid-run reach the live validator before a
+    /// later call is evaluated.
+    #[test]
+    fn lists_offered_mid_run_block_a_later_call() {
+        let control = v7_spots(&PipelineConfig::default());
+        assert!(
+            control.iter().any(|c| c == "N1AA") && control.iter().any(|c| c == "N2BB"),
+            "control run must spot both N2BB and N1AA, got {control:?}"
+        );
+        let spots = v7_with_lists_offered_at_n2bb(
+            &PipelineConfig::default(),
+            OperatorLists {
+                blocklist: Blocklist::parse("N1AA\n"),
+                ..OperatorLists::default()
+            },
+        );
+        assert_eq!(spots, vec!["N2BB".to_string()]);
+    }
+
+    #[test]
+    fn lists_offered_mid_run_lift_a_block() {
+        let cfg = PipelineConfig {
+            blocklist: Blocklist::parse("N1AA\n"),
+            ..PipelineConfig::default()
+        };
+        assert!(
+            !v7_spots(&cfg).iter().any(|c| c == "N1AA"),
+            "control: the startup blocklist must hold N1AA back"
+        );
+        let spots = v7_with_lists_offered_at_n2bb(&cfg, OperatorLists::default());
+        assert!(spots.iter().any(|c| c == "N1AA"), "got {spots:?}");
     }
 
     /// MAN-45 (PR #63 round-9 finding): `manta_active_tracks` reported a

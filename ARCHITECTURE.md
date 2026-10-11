@@ -518,6 +518,10 @@ validation (MAN-28). Dedupe (step 5) still applies.
   scaffold with every key commented out at its default, pinned to the code
   defaults and the loader's key list by tests (MAN-76,
   `docs/DECISIONS/2026-10-07-man76-config-check-init.md`).
+  With `[server]`, SIGHUP re-runs that same pipeline and swaps the `[spot]`
+  lists into the live validator and `dry_run` into each uplink task; other
+  keys need a restart, and an invalid reload is logged and changes nothing
+  (MAN-78, `docs/DECISIONS/2026-10-10-man78-live-reload.md`).
 - **Source diagnostics (MAN-125)**: `manta devices` enumerates audio inputs
   and, when compiled, SoapySDR selectors without opening capture streams.
   `manta check [SOURCE]` shares typed config/source resolution and source wrappers

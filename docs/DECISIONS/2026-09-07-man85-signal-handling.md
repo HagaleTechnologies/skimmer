@@ -49,8 +49,8 @@ improvement, and `crates/manta-cli/tests/signal_shutdown.rs` pins it
 deliberately rather than leaving it incidental.
 
 It does constrain one future design. The 2026-09-05 broad review filed
-"live config reload via SIGHUP or `manta reload`" as R-08 (cross-
-referenced to MAN-30). SIGHUP is now claimed as a graceful-shutdown
+"live config reload via SIGHUP or `manta reload`" as R-08, built as
+MAN-78 (MAN-30 is the unrelated scheduled-segment ticket). SIGHUP is now claimed as a graceful-shutdown
 trigger indistinguishable from SIGINT/SIGTERM, so R-08 cannot add reload
 behaviour through `ctrlc`'s API. If it is ever built it needs a
 signal-distinguishing mechanism of its own (`signal-hook`'s iterator API,
@@ -92,3 +92,17 @@ become unnecessary. Follow-up cleanup, once MAN-75 is on `main`:
 - `docker-compose.yml` -- update the stale "the image already sets
   `STOPSIGNAL SIGINT`" comment; the `stop_signal`-absent assertion itself
   stays correct.
+
+## Superseded in part by MAN-78 (2026-10-10)
+
+MAN-78 took the `signal-hook` route this record named above. The workspace
+now declares plain `ctrlc = "3"`: ctrlc keeps SIGINT (and Ctrl-C/Ctrl-Break
+on Windows, where `termination` never applied). On Unix, `signal-hook`
+registers SIGTERM on the same `stop` flag, and SIGHUP either on that flag
+(no `[server]` table: drain and exit 0, as before) or on a
+`signal_hook::iterator::Signals` handle that the `manta-reload` thread
+reads (with `[server]`: reload the `[spot]` lists and `[[rbn_uplink]]`
+`dry_run`). All of them are installed at the same point as before, ahead
+of the `listening:` banner. The SIGINT/SIGTERM drain, the exit code and
+`signal_shutdown.rs`'s five tests are unchanged. See
+`docs/DECISIONS/2026-10-10-man78-live-reload.md`.

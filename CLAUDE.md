@@ -51,6 +51,10 @@ MAN-132: the metrics listener (`/metrics`, `/healthz`) binds
 `[server].metrics_bind_addr`, default `127.0.0.1`, while telnet/JSON keep
 `bind_addr` (`0.0.0.0`) — see
 docs/DECISIONS/2026-10-08-man132-metrics-loopback-bind.md.
+MAN-78: SIGHUP to a `[server]` daemon reloads `[spot]` lists and
+`[[rbn_uplink]]` `dry_run`; invalid reloads are logged and ignored.
+`cty_path`/`scp_path` and every other key need a restart. See
+docs/DECISIONS/2026-10-10-man78-live-reload.md.
 
 MAN-79: `--cty`/`--scp` and `[spot].cty_path`/`scp_path` override the
 vendored `cty.dat`/`master.scp` at run time. `run`/`listen`/`soak`/`doctor`/
