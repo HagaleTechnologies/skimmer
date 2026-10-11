@@ -21,6 +21,14 @@ git history and `docs/DECISIONS/`.
 
 ## [Unreleased]
 
+### Added
+
+- `manta decode --center-freq-hz HZ` sets the recording's RF centre
+  frequency, overriding its `<name>.json` sidecar. Without the flag, a
+  recording with no sidecar (or a sidecar whose `center_freq_hz` is not
+  positive) gets a warning that its frequencies are baseband offsets
+  (MAN-131).
+
 ### Changed
 
 - `manta --version` (and `-V`) names the exact build: crate version, git
@@ -33,3 +41,12 @@ git history and `docs/DECISIONS/`.
   instead of interleaving every track's characters on stdout. `SPOT:` lines
   move from stderr to stdout. With a `[server]` table decoded text is off
   unless `--decoded-text` is given (MAN-123). Decoder output is unchanged.
+
+### Fixed
+
+- Live sound-card input no longer ends `run`, `listen`, `soak` or `doctor`
+  when the capture buffer is momentarily empty; a device that delivers
+  nothing for 5 s is reported as an error. Audio device errors name the
+  device and the 48000 Hz requirement and say what to check next, with a
+  macOS microphone-permission hint, and a device delivering only digital
+  silence gets a warning (MAN-131). Decoder output is unchanged.

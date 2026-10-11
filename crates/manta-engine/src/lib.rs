@@ -307,11 +307,17 @@ pub fn decode_samples(
 }
 
 /// decode_samples, sourced from a WAV file via manta-input. ARCHITECTURE
-/// §3; SPEC §3–§5.
-pub fn decode_wav(path: &Path, cfg: &PipelineConfig) -> Result<DecodeReport> {
+/// §3; SPEC §3–§5. `center_freq_hz` overrides the sidecar's centre
+/// frequency (MAN-131, `decode --center-freq-hz`); `None` keeps the
+/// sidecar's value, `0.0` without one.
+pub fn decode_wav(
+    path: &Path,
+    center_freq_hz: Option<f64>,
+    cfg: &PipelineConfig,
+) -> Result<DecodeReport> {
     let mut src = WavIqSource::open(path)?;
     let fs = src.sample_rate();
-    let center = src.center_freq_hz();
+    let center = center_freq_hz.unwrap_or_else(|| src.center_freq_hz());
     let iq = read_all(&mut src)?;
     decode_samples(&iq, fs, center, cfg)
 }

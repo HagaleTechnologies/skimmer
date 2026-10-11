@@ -25,7 +25,7 @@ pub use hpsdr::{HpsdrConfig, HpsdrDevice, HpsdrIqSource};
 
 use anyhow::{bail, Context, Result};
 use num_complex::Complex32;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Packet-level health counters for an input source that can lose or
 /// discard whole packets on the wire (MAN-56, following MAN-22's
@@ -185,6 +185,25 @@ pub struct Sidecar {
     pub center_freq_hz: f64,
 }
 
+/// Where `wav`'s sidecar lives: `<stem>.json` next to it. ARCHITECTURE §3.
+pub fn sidecar_path(wav: &Path) -> PathBuf {
+    wav.with_extension("json")
+}
+
+/// The `<stem>.json` sidecar of `wav`, if one exists (ARCHITECTURE §3).
+/// `None` when there is no such file; malformed JSON is an error naming it.
+pub fn read_sidecar(wav: &Path) -> Result<Option<Sidecar>> {
+    let sidecar_path = sidecar_path(wav);
+    if !sidecar_path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&sidecar_path)
+        .with_context(|| format!("read sidecar {}", sidecar_path.display()))?;
+    let sc: Sidecar = serde_json::from_str(&text)
+        .with_context(|| format!("parse sidecar {}", sidecar_path.display()))?;
+    Ok(Some(sc))
+}
+
 /// Stereo WAV file (ch0=I, ch1=Q) as an IqSource, with an optional `<stem>.json` sidecar for center frequency. ARCHITECTURE §3.
 pub struct WavIqSource {
     samples: Vec<Complex32>,
@@ -219,16 +238,7 @@ impl WavIqSource {
             .map(|&[re, im]| Complex32::new(re, im))
             .collect();
 
-        let sidecar_path = path.with_extension("json");
-        let center_freq_hz = if sidecar_path.exists() {
-            let text = std::fs::read_to_string(&sidecar_path)
-                .with_context(|| format!("read sidecar {}", sidecar_path.display()))?;
-            let sc: Sidecar = serde_json::from_str(&text)
-                .with_context(|| format!("parse sidecar {}", sidecar_path.display()))?;
-            sc.center_freq_hz
-        } else {
-            0.0
-        };
+        let center_freq_hz = read_sidecar(path)?.map_or(0.0, |sc| sc.center_freq_hz);
 
         Ok(WavIqSource {
             samples,
@@ -318,6 +328,43 @@ mod tests {
         write_f32_wav(&wav, &samples(), 96_000);
         let src = WavIqSource::open(&wav).unwrap();
         assert_eq!(src.center_freq_hz(), 0.0);
+    }
+
+    #[test]
+    fn read_sidecar_is_none_without_a_json_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("fix.wav");
+        write_f32_wav(&wav, &samples(), 96_000);
+        assert!(read_sidecar(&wav).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_sidecar_returns_the_center_frequency() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("fix.wav");
+        std::fs::write(
+            dir.path().join("fix.json"),
+            br#"{"center_freq_hz": 7030000.0}"#,
+        )
+        .unwrap();
+        assert_eq!(sidecar_path(&wav), dir.path().join("fix.json"));
+        let sc = read_sidecar(&wav).unwrap().expect("sidecar present");
+        assert_eq!(sc.center_freq_hz, 7_030_000.0);
+    }
+
+    #[test]
+    fn read_sidecar_rejects_malformed_json_naming_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("fix.wav");
+        write_f32_wav(&wav, &samples(), 96_000);
+        let json = dir.path().join("fix.json");
+        std::fs::write(&json, b"{not json").unwrap();
+        let err = format!("{:#}", read_sidecar(&wav).unwrap_err());
+        let want = format!("parse sidecar {}", json.display());
+        assert!(err.contains(&want), "{err}");
+        // `WavIqSource::open` reports the same text.
+        let open_err = format!("{:#}", WavIqSource::open(&wav).err().expect("bad sidecar"));
+        assert!(open_err.contains(&want), "{open_err}");
     }
 
     #[test]

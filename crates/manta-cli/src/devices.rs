@@ -2,6 +2,7 @@
 
 use std::io::{self, Write};
 
+use manta_input::devices::quoted_name as quoted;
 use manta_input::devices::{AudioDevice, DeviceInventory, Enumeration, SoapyDevice};
 use serde::Serialize;
 
@@ -132,21 +133,6 @@ impl DeviceReport {
         output.push_str("HPSDR: automatic discovery is not supported; use --hpsdr-host HOST with an hpsdr-enabled build.\nKiwiSDR: use --kiwi-host HOST.\n");
         output
     }
-}
-
-fn quoted(value: &str) -> String {
-    // JSON escaping quotes C0 characters (including ANSI ESC) and names.
-    serde_json::to_string(value)
-        .expect("serializing a string cannot fail")
-        .chars()
-        .map(|c| {
-            if c.is_control() {
-                format!("\\u{:04x}", c as u32)
-            } else {
-                c.to_string()
-            }
-        })
-        .collect()
 }
 
 fn escaped_error(value: &str) -> String {

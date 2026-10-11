@@ -173,6 +173,62 @@ fn a_failed_bind_names_the_listener_and_its_address() {
     );
 }
 
+/// MAN-131 scenario 2: whichever of the three listeners hits a port already
+/// in use, the error names that listener, its address key and its port.
+/// Pins behaviour MAN-132 already delivered (its D8); before MAN-131 only
+/// the metrics listener was covered.
+#[test]
+fn every_failed_bind_names_its_listener_address_and_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = silent_48k_wav(dir.path(), 3);
+    for (listener, port_key, addr_key) in [
+        ("telnet", "telnet_port", "bind_addr"),
+        ("JSON", "json_port", "bind_addr"),
+        ("metrics", "metrics_port", "metrics_bind_addr"),
+    ] {
+        // Held for the whole run, so this listener's bind must fail.
+        let taken = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        // Only the listener under test gets the held port; the others stay
+        // ephemeral.
+        let ports: String = ["telnet_port", "json_port", "metrics_port"]
+            .iter()
+            .map(|key| {
+                let value = if *key == port_key { port } else { 0 };
+                format!("{key} = {value}\n")
+            })
+            .collect();
+        let cfg = dir.path().join(format!("{port_key}.toml"));
+        std::fs::write(
+            &cfg,
+            format!(
+                "[server]\nstation_callsign = \"W3XYZ\"\nstatus_interval_secs = 0\n\
+                 bind_addr = \"127.0.0.1\"\nmetrics_bind_addr = \"127.0.0.1\"\n{ports}"
+            ),
+        )
+        .unwrap();
+
+        let out = run_command(&wav, &cfg).output().unwrap();
+        drop(taken);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{listener}: {stderr}");
+        for needle in [
+            format!("binding the {listener} server"),
+            format!("{addr_key} = \"127.0.0.1\""),
+            format!("{port_key} = {port}"),
+        ] {
+            assert!(
+                stderr.contains(&needle),
+                "{listener}: {needle:?} missing from {stderr}"
+            );
+        }
+        assert!(
+            !stderr.contains("listening:"),
+            "{listener}: banner after a failed bind: {stderr}"
+        );
+    }
+}
+
 /// Kills and reaps the daemon child process on drop, including on a
 /// failing assertion, so a failing assert never leaks a `manta` process.
 #[cfg(unix)]
