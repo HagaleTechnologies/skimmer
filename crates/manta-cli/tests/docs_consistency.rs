@@ -197,6 +197,42 @@ fn readme_status_says_pre_stability_alpha() {
     );
 }
 
+/// MAN-298: Installation offers a download of every archive the release
+/// workflow builds, so a platform added to the build matrix is documented too.
+#[test]
+fn readme_installation_offers_every_release_archive() {
+    let install = squash_whitespace(section(&doc("README.md"), "Installation"));
+    assert!(
+        !install.contains("There is no tagged release yet"),
+        "README Installation still says no release exists"
+    );
+    assert!(
+        install.contains("releases/latest/download/"),
+        "README Installation gives no download command"
+    );
+    let workflow = doc(".github/workflows/release-publish.yml");
+    let artifacts: Vec<&str> = workflow
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("artifact: "))
+        .collect();
+    assert!(
+        !artifacts.is_empty(),
+        "no `artifact:` entries in the release build matrix"
+    );
+    for artifact in artifacts {
+        let ext = if artifact.contains("windows") {
+            "zip"
+        } else {
+            "tar.gz"
+        };
+        let archive = format!("{artifact}.{ext}");
+        assert!(
+            install.contains(&archive),
+            "README Installation never names release archive `{archive}`"
+        );
+    }
+}
+
 /// Every command in the Quickstart must run on a build the reader was told
 /// to make. `--soapy-driver` needs `--features soapy`, which is in neither
 /// the default build nor any release binary.

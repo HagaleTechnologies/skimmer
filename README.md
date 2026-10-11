@@ -58,10 +58,52 @@ more than one implementation of it, on more than one operating system.
 
 ## Installation
 
-There is no tagged release yet, so there is no prebuilt binary or Docker
-image to pull — build from source. You need Rust 1.98+ and a `git`
-executable on `PATH`. Git is a build-time requirement, not just a way to
-clone this repo: manta depends on
+### Download a release
+
+Each tagged release on the
+[Releases page](https://github.com/HagaleTechnologies/manta/releases) has a
+prebuilt archive for every supported platform. You need neither Rust nor a
+clone of this repository.
+
+| Platform | Archive |
+|---|---|
+| Linux x86-64 | `manta-linux-x86_64.tar.gz` |
+| Linux arm64 (64-bit Raspberry Pi OS and other ARM boards) | `manta-linux-arm64.tar.gz` |
+| macOS, Intel | `manta-macos-x86_64.tar.gz` |
+| macOS, Apple silicon | `manta-macos-arm64.tar.gz` |
+| Windows x86-64 | `manta-windows-x86_64.zip` |
+
+On Linux or macOS, put your archive's name in place of
+`manta-linux-x86_64.tar.gz`:
+
+```sh
+curl -fLO https://github.com/HagaleTechnologies/manta/releases/latest/download/manta-linux-x86_64.tar.gz
+curl -fLO https://github.com/HagaleTechnologies/manta/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+tar xzf manta-linux-x86_64.tar.gz
+cd manta-linux-x86_64
+./manta --version
+```
+
+On macOS, check the download with `shasum -a 256 -c --ignore-missing
+SHA256SUMS` instead. On Windows, download the ZIP and `SHA256SUMS` from the
+Releases page, check them as
+[Verifying a downloaded release](docs/RUNBOOKS/release.md#verifying-a-downloaded-release)
+shows, unzip, and run `.\manta.exe --version` in the unpacked folder.
+
+Each archive holds the binary, this README, both licence files, an example
+config and the kit for running manta as a service
+([packaging/README.md](packaging/README.md)). Release binaries read
+KiwiSDR, HPSDR, audio and WAV input; SoapySDR needs a build from source.
+Linux binaries need the ALSA runtime library (`libasound2`, see the notes
+below). macOS binaries are not signed or notarized: if macOS refuses to run
+one you downloaded in a browser, clear the flag with
+`xattr -d com.apple.quarantine ./manta`.
+
+### Build from source
+
+You need Rust 1.98+ and a `git` executable on `PATH`. Git is a build-time
+requirement, not just a way to clone this repo: manta depends on
 [`coppa`](https://github.com/HagaleTechnologies/coppa) as a rev-pinned git
 dependency, and `.cargo/config.toml` sets `[net] git-fetch-with-cli = true`
 so cargo fetches it through the `git` binary rather than its built-in
@@ -83,15 +125,17 @@ the `--features hpsdr` across: drop it and the binary has no `--hpsdr-host`
 flag at all, so it no longer matches the install above or the HPSDR row in
 the Inputs table below.
 
-A binary and a Docker image publish automatically, for every platform,
-from the first tag:
+### Docker
+
+Each release also publishes a multi-arch image (`linux/amd64`,
+`linux/arm64`) to GitHub Container Registry:
 
 ```sh
-# once a release exists:
 docker run --rm ghcr.io/hagaletechnologies/manta:latest --help
 ```
 
-**Notes:**
+### Notes
+
 - Building on Linux compiles the ALSA bindings (audio input is an
   unconditional dependency, even if you only ever use file, KiwiSDR, or
   HPSDR input), so the build host needs the ALSA development headers and
