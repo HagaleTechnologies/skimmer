@@ -27,12 +27,11 @@ git history and `docs/DECISIONS/`.
   `--log-level <LEVEL>`, each shorthand for `RUST_LOG=<level>` that
   overrides it, and `--log-format json`, which writes every stderr log line
   as one JSON object for a log aggregator (MAN-124).
-
-### Fixed
-
-- `manta run`'s log lines carry no colour escape codes when stderr is not a
-  terminal (a file, a pipe, the journal or a container log); `NO_COLOR` is
-  still honoured on a terminal (MAN-124).
+- `manta decode --center-freq-hz HZ` sets the recording's RF centre
+  frequency, overriding its `<name>.json` sidecar. Without the flag, a
+  recording with no sidecar (or a sidecar whose `center_freq_hz` is not
+  positive) gets a warning that its frequencies are baseband offsets,
+  and is decoded at a 0.0 centre (MAN-131).
 
 ### Changed
 
@@ -46,3 +45,15 @@ git history and `docs/DECISIONS/`.
   instead of interleaving every track's characters on stdout. `SPOT:` lines
   move from stderr to stdout. With a `[server]` table decoded text is off
   unless `--decoded-text` is given (MAN-123). Decoder output is unchanged.
+
+### Fixed
+
+- `manta run`'s log lines carry no colour escape codes when stderr is not a
+  terminal (a file, a pipe, the journal or a container log); `NO_COLOR` is
+  still honoured on a terminal (MAN-124).
+- Live sound-card input no longer ends `run`, `listen`, `soak` or `doctor`
+  when the capture buffer is momentarily empty; a device that delivers
+  nothing for 5 s is reported as an error. Audio device errors name the
+  device and the 48000 Hz requirement and say what to check next, with a
+  macOS microphone-permission hint, and a device delivering only digital
+  silence gets a warning (MAN-131). Decoder output is unchanged.

@@ -82,9 +82,37 @@ fn assemble(
     DeviceInventory { audio, soapy }
 }
 
+/// The one spelling of a device name shown to operators, shared by `manta
+/// devices` and the audio-input errors (MAN-131) so a name can be copied
+/// from either. JSON escaping quotes the name and escapes C0 characters
+/// (including ANSI ESC); any remaining control character (C1) becomes
+/// `\uXXXX` too.
+pub fn quoted_name(value: &str) -> String {
+    serde_json::to_string(value)
+        .expect("serializing a string cannot fail")
+        .chars()
+        .map(|c| {
+            if c.is_control() {
+                format!("\\u{:04x}", c as u32)
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quoted_name_matches_the_manta_devices_spelling() {
+        assert_eq!(quoted_name("USB Audio CODEC"), "\"USB Audio CODEC\"");
+        assert_eq!(quoted_name("say \"hi\""), "\"say \\\"hi\\\"\"");
+        assert_eq!(quoted_name("\u{1b}[31m"), "\"\\u001b[31m\"");
+        // C1 control, same case as manta-cli's devices.rs test.
+        assert_eq!(quoted_name("\u{9b}31m"), "\"\\u009b31m\"");
+    }
 
     fn audio(name: &str, inputs: u16, outputs: u16) -> coppa_audio::AudioDevice {
         coppa_audio::AudioDevice {

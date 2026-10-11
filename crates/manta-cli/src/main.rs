@@ -66,8 +66,15 @@ enum Command {
     /// deterministic: the same file always produces the same output.
     Decode {
         /// Stereo IQ WAV file. Its centre frequency is read from the
-        /// matching `<name>.json` sidecar next to it.
+        /// matching `<name>.json` sidecar next to it, unless
+        /// --center-freq-hz is given.
         path: PathBuf,
+        /// RF centre frequency of the recording, in Hz, overriding its sidecar.
+        ///
+        /// Without this flag or a sidecar, reported frequencies are baseband
+        /// offsets from the recording's centre, and manta prints a warning.
+        #[arg(long, value_name = "HZ", value_parser = parse_center_freq_hz)]
+        center_freq_hz: Option<f64>,
         /// Print the full decode report as one JSON object.
         #[arg(long, help_heading = "Output")]
         json: bool,
@@ -987,9 +994,12 @@ impl LiveSourceSpec {
                 let mut sources = manta_input::hpsdr::HpsdrDevice::open(cfg)?;
                 Box::new(sources.remove(0))
             }
-            LiveSourceSpec::AudioDevice(device) => {
-                Box::new(manta_input::AudioIqSource::from_device(device.as_deref())?)
-            }
+            // Each (re)open gets its own one-shot silence notice (MAN-131).
+            LiveSourceSpec::AudioDevice(device) => Box::new(
+                manta_input::AudioIqSource::from_device(device.as_deref())?.with_silence_notice(
+                    Box::new(|device| eprintln!("{}", audio_silence_warning(device))),
+                ),
+            ),
             LiveSourceSpec::File { path, source_iq } => {
                 open_audio_source(None, Some(path.clone()), *source_iq, None)?
             }
@@ -1158,6 +1168,41 @@ fn warn_if_audio_source_has_no_rf_reference(has_rf_aware_source: bool, dial_freq
              rig's dial frequency, e.g. --dial-freq-hz 14030000.",
         );
     }
+}
+
+/// MAN-131: a live audio input delivering exact zeros is, on macOS, the
+/// usual sign of a denied microphone permission (cpal cannot see TCC; the
+/// stream opens and the callback hands over silence). A warning, not an
+/// error: a muted input is a legitimate state, and `doctor` still reports
+/// NO_SIGNAL on its own.
+fn audio_silence_warning(device: &str) -> String {
+    format!(
+        "warning: audio input {device} is delivering digital silence at {} Hz \
+         (every sample is exactly zero) -- {}",
+        manta_input::TARGET_RATE_HZ,
+        manta_input::audio::audio_input_hint()
+    )
+}
+
+/// MAN-131: `decode`'s analogue of `warn_if_audio_source_has_no_rf_reference`.
+/// `sidecar_center_hz` is `None` when `<stem>.json` does not exist. When this
+/// returns `Some`, the `Decode` handler decodes at a 0.0 centre, so a
+/// negative sidecar value cannot contradict the warning.
+fn recording_center_warning(wav: &Path, sidecar_center_hz: Option<f64>) -> Option<String> {
+    let sidecar = manta_input::sidecar_path(wav);
+    let why = match sidecar_center_hz {
+        Some(hz) if hz > 0.0 => return None,
+        Some(hz) => format!(
+            "sidecar {} gives center_freq_hz = {hz}, not an RF frequency",
+            sidecar.display()
+        ),
+        None => format!("no sidecar {} next to {}", sidecar.display(), wav.display()),
+    };
+    Some(format!(
+        "warning: {why} -- reported frequencies are baseband offsets from the \
+         recording's centre, not absolute RF frequencies. Pass the centre \
+         frequency, e.g. --center-freq-hz 14000000."
+    ))
 }
 
 /// Wrap `src` in a `DecimatingSource` targeting `capture_rate_hz`, unless
@@ -1410,8 +1455,18 @@ fn parse_dial_freq_hz(s: &str) -> std::result::Result<f64, String> {
     check_dial_freq_hz("--dial-freq-hz", hz)
 }
 
+/// `decode --center-freq-hz` (MAN-131). The parse error is just the
+/// `ParseFloatError` text: clap already prints the flag and the value.
+fn parse_center_freq_hz(s: &str) -> std::result::Result<f64, String> {
+    let hz: f64 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    check_dial_freq_hz("--center-freq-hz", hz)
+}
+
 /// `parse_dial_freq_hz`'s check, shared with `input.center_freq_hz`
-/// (MAN-261); `name` is the flag or config key the message cites.
+/// (MAN-261) and `decode --center-freq-hz` (MAN-131); `name` is the flag
+/// or config key the message cites.
 fn check_dial_freq_hz(name: &str, hz: f64) -> std::result::Result<f64, String> {
     if !hz.is_finite() || hz <= 0.0 {
         return Err(format!(
@@ -3558,6 +3613,7 @@ fn real_main() -> Result<()> {
         }
         Command::Decode {
             path,
+            center_freq_hz,
             json,
             filters,
             config,
@@ -3598,7 +3654,22 @@ fn real_main() -> Result<()> {
                 decode_cfg.engine,
             )?;
             cfg.decode = decode_cfg;
-            let report = decode_wav(&path, &cfg)?;
+            // MAN-131: say so before decoding when the reported frequencies
+            // will be baseband offsets. Only for an existing file, so a
+            // missing WAV still fails with just its `open WAV` error.
+            let mut center_freq_hz = center_freq_hz;
+            if center_freq_hz.is_none() && path.is_file() {
+                let sidecar = manta_input::read_sidecar(&path)?;
+                if let Some(warning) =
+                    recording_center_warning(&path, sidecar.map(|sc| sc.center_freq_hz))
+                {
+                    eprintln!("{warning}");
+                    // Keep the warning true: a negative sidecar centre
+                    // decodes at 0.0, not shifted by itself.
+                    center_freq_hz = Some(0.0);
+                }
+            }
+            let report = decode_wav(&path, center_freq_hz, &cfg)?;
             if json {
                 println!("{}", serde_json::to_string(&report)?);
             } else {
@@ -4681,6 +4752,44 @@ mod tests {
     // does not break these tests.
     fn at_day(d: u64) -> SystemTime {
         manta_spot::vintage::cty_dat_retrieved_at().unwrap() + Duration::from_secs(d * 86_400)
+    }
+
+    #[test]
+    fn audio_silence_warning_names_the_device_the_rate_and_the_hint() {
+        let w = audio_silence_warning("\"Test Mic\"");
+        assert!(
+            w.starts_with(
+                "warning: audio input \"Test Mic\" is delivering digital silence at 48000 Hz \
+                 (every sample is exactly zero) -- "
+            ),
+            "{w}"
+        );
+        assert!(w.ends_with(manta_input::audio::audio_input_hint()), "{w}");
+    }
+
+    #[test]
+    fn recording_center_warning_covers_a_missing_and_a_non_positive_sidecar() {
+        let wav = Path::new("/rec/x.wav");
+        let missing = recording_center_warning(wav, None).unwrap();
+        assert!(
+            missing.starts_with("warning: no sidecar /rec/x.json next to /rec/x.wav -- "),
+            "{missing}"
+        );
+        let zero = recording_center_warning(wav, Some(0.0)).unwrap();
+        for w in [&missing, &zero] {
+            assert!(
+                w.contains("baseband offsets") && w.contains("--center-freq-hz 14000000"),
+                "{w}"
+            );
+        }
+        assert!(
+            zero.starts_with(
+                "warning: sidecar /rec/x.json gives center_freq_hz = 0, not an RF frequency -- "
+            ),
+            "{zero}"
+        );
+        assert!(recording_center_warning(wav, Some(-5.0)).is_some());
+        assert!(recording_center_warning(wav, Some(14_000_000.0)).is_none());
     }
 
     #[test]
@@ -6781,6 +6890,9 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
         "duration",
         "config",
         "path",
+        // `decode --center-freq-hz` (MAN-131 D8): a recording's centre, not
+        // the live receiver's `input.center_freq_hz`.
+        "center_freq_hz",
         "help",
         "version",
         "verbose",
