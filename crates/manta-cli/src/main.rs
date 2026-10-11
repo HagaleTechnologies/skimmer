@@ -14,11 +14,8 @@ mod config;
 mod config_cmd;
 mod devices;
 mod reconnect;
-<<<<<<< HEAD
 mod source_check;
-=======
 mod text_lines;
->>>>>>> 72ca072ce1b3557406981ba227b584c9e22196b1
 use reconnect::ReconnectingSource;
 
 #[derive(Parser)]

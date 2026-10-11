@@ -502,18 +502,12 @@ validation (MAN-28). Dedupe (step 5) still applies.
   `[[rbn_uplink]]`, `[input]` (source type and its keys, dial frequency,
   capture rate, ppm correction), `[spot]` (watch list, blocklist and notch
   files, and `cty.dat`/`master.scp` overrides), `[detector]` (thresholds, timers, track cap) and `[decode]` —
-<<<<<<< HEAD
-  read by `run`, `soak`, `doctor` and `check` (`--config`, else `MANTA_CONFIG`) and
-  by `decode`/`oracle`. Precedence is flag, then `MANTA_<TABLE>_<KEY>`
-  environment variable, then file, then default; `decode` and `oracle`
-  never read the environment. Unknown tables, keys and `MANTA_*` variables
-=======
-  read by `run`, `soak` and `doctor` (`--config`, else `MANTA_CONFIG`) and
-  by `decode`/`oracle`, and by `bench sensitivity` (which reads only
-  `[decode]`/`[detector]`, never the environment). Precedence is flag, then
-  `MANTA_<TABLE>_<KEY>` environment variable, then file, then default;
-  `decode` and `oracle` never read the environment. Unknown tables, keys and `MANTA_*` variables
->>>>>>> 72ca072ce1b3557406981ba227b584c9e22196b1
+  read by `run`, `soak`, `doctor` and `check` (`--config`, else
+  `MANTA_CONFIG`) and by `decode`/`oracle`, and by `bench sensitivity`
+  (which reads only `[decode]`/`[detector]`, never the environment).
+  Precedence is flag, then `MANTA_<TABLE>_<KEY>` environment variable, then
+  file, then default; `decode` and `oracle` never read the environment.
+  Unknown tables, keys and `MANTA_*` variables
   are errors. `docs/SPEC-decode-core.md` §9 is the key table. Not yet
   configurable: a band plan (CW segment limits) and the
   compile-time constants SPEC §9 marks `not configurable yet`.
