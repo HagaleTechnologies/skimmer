@@ -12,7 +12,9 @@ mod bench;
 mod build_info;
 mod config;
 mod config_cmd;
+mod devices;
 mod reconnect;
+mod source_check;
 mod text_lines;
 use reconnect::ReconnectingSource;
 
@@ -45,6 +47,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List audio inputs and available SDR devices.
+    Devices {
+        /// Print one JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read a short source sample and report its level without decoding.
+    #[command(
+        long_about = "Read a short source sample and report its level without decoding. SOURCE is an audio WAV path, equivalent to --source PATH; use --source-iq for complex IQ. Without a selector, use the configured input or default audio input. The sampling deadline is duration + 5 seconds after opening, checked between reads. Native open/read calls can exceed it."
+    )]
+    Check(source_check::Args),
     /// Decode CW from a recorded IQ WAV file.
     ///
     /// Reads a stereo WAV file (channel 0 = I, channel 1 = Q), decodes the
@@ -3049,11 +3062,14 @@ fn bundled_cty_warning(cty_overridden: bool, now: std::time::SystemTime) -> Opti
     ))
 }
 
-fn prepare_live(
-    cli: CliOverrides,
-    config_flag: Option<PathBuf>,
-    cli_engine: Option<Engine>,
-) -> Result<Prepared> {
+/// Shared typed config and source resolution, with no pipeline assets or I/O.
+struct SourcePrepared {
+    config_path: Option<PathBuf>,
+    loaded: config::Loaded,
+    resolved: Resolved,
+}
+
+fn prepare_source(cli: CliOverrides, config_flag: Option<PathBuf>) -> Result<SourcePrepared> {
     let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
     let config_path = config_flag.or_else(|| config::config_path_from_env(&vars));
     let loaded = config::load(config_path.as_deref(), config::Env::Read(&vars))?;
@@ -3061,6 +3077,23 @@ fn prepare_live(
     for note in &resolved.notes {
         eprintln!("{note}");
     }
+    Ok(SourcePrepared {
+        config_path,
+        loaded,
+        resolved,
+    })
+}
+
+fn prepare_live(
+    cli: CliOverrides,
+    config_flag: Option<PathBuf>,
+    cli_engine: Option<Engine>,
+) -> Result<Prepared> {
+    let SourcePrepared {
+        config_path,
+        loaded,
+        resolved,
+    } = prepare_source(cli, config_flag)?;
     let decode = merge_cli_engine(cli_engine, loaded.decode.clone());
     let mut pipeline = build_pipeline_config(
         resolved.freq_correction_ppm,
@@ -3517,6 +3550,17 @@ fn invalid_status_doc(e: serde_json::Error) -> anyhow::Error {
 fn main() -> Result<()> {
     warn_deprecations();
     match Cli::parse().command {
+        Command::Devices { json } => std::process::exit(devices::run(json)?),
+        Command::Check(args) => {
+            let code = match source_check::run(args) {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("error: {error:#}");
+                    1
+                }
+            };
+            std::process::exit(code);
+        }
         Command::Decode {
             path,
             json,
@@ -6738,7 +6782,7 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
     fn every_config_backed_flag_maps_to_a_key() {
         use clap::CommandFactory;
         let cli = Cli::command();
-        for name in ["run", "soak", "doctor", "decode"] {
+        for name in ["run", "soak", "doctor", "decode", "check"] {
             let sub = cli.find_subcommand(name).unwrap();
             for arg in sub.get_arguments() {
                 let id = arg.get_id().as_str();

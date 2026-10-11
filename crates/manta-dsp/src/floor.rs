@@ -185,6 +185,12 @@ impl FloorBank {
         self.hop_counter += 1;
     }
 
+    /// Raw per-channel lower quartile, before the neighborhood clamp. SPEC §2.1.
+    /// Until the first update this is initialized state, not a measurement.
+    pub fn channel_floor_db(&self, k: usize) -> f64 {
+        self.floor_db[k]
+    }
+
     /// Effective floor `F[k] = min(F_ch[k], F_blk[k/32] + 3dB)`. SPEC §2.2.
     pub fn effective_floor_db(&self, k: usize) -> f64 {
         let block = k / BLOCK_CHANNELS;
@@ -267,6 +273,16 @@ impl Gate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_channel_floor_preserves_quartile_when_neighbors_lower_effective_floor() {
+        let mut bank = FloorBank::new(64);
+        let mut powers = vec![-100.0; 64];
+        powers[31] = -40.0;
+        bank.update(&powers);
+        assert_eq!(bank.channel_floor_db(31), -39.75);
+        assert_eq!(bank.effective_floor_db(31), -96.75);
+    }
 
     #[test]
     fn quantile_of_uniform_noise_lands_near_25th_percentile() {
