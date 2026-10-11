@@ -13,11 +13,8 @@ mod build_info;
 mod calibrate_cmd;
 mod config;
 mod config_cmd;
-<<<<<<< HEAD
 mod config_edit;
-=======
 mod devices;
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
 mod reconnect;
 mod source_check;
 mod text_lines;
@@ -3287,16 +3284,8 @@ fn bundled_cty_warning(cty_overridden: bool, now: std::time::SystemTime) -> Opti
     ))
 }
 
-<<<<<<< HEAD
-/// Load the config (`--config`, else `MANTA_CONFIG`) with the `MANTA_*`
-/// overlay, merge the CLI over it and print the merge notes: the part of
-/// `prepare_live` that `calibrate` shares, which needs no pipeline config.
-fn load_and_resolve(
-    cli: CliOverrides,
-    config_flag: Option<PathBuf>,
-) -> Result<(Option<PathBuf>, config::Loaded, Resolved)> {
-=======
-/// Shared typed config and source resolution, with no pipeline assets or I/O.
+/// Shared typed config and source resolution, with no pipeline assets or I/O:
+/// the part of `prepare_live` that `check` and `calibrate` share.
 struct SourcePrepared {
     config_path: Option<PathBuf>,
     loaded: config::Loaded,
@@ -3304,7 +3293,6 @@ struct SourcePrepared {
 }
 
 fn prepare_source(cli: CliOverrides, config_flag: Option<PathBuf>) -> Result<SourcePrepared> {
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
     let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
     let config_path = config_flag.or_else(|| config::config_path_from_env(&vars));
     let loaded = config::load(config_path.as_deref(), config::Env::Read(&vars))?;
@@ -3312,15 +3300,11 @@ fn prepare_source(cli: CliOverrides, config_flag: Option<PathBuf>) -> Result<Sou
     for note in &resolved.notes {
         eprintln!("{note}");
     }
-<<<<<<< HEAD
-    Ok((config_path, loaded, resolved))
-=======
     Ok(SourcePrepared {
         config_path,
         loaded,
         resolved,
     })
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
 }
 
 fn prepare_live(
@@ -3328,15 +3312,11 @@ fn prepare_live(
     config_flag: Option<PathBuf>,
     cli_engine: Option<Engine>,
 ) -> Result<Prepared> {
-<<<<<<< HEAD
-    let (config_path, loaded, resolved) = load_and_resolve(cli, config_flag)?;
-=======
     let SourcePrepared {
         config_path,
         loaded,
         resolved,
     } = prepare_source(cli, config_flag)?;
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
     let decode = merge_cli_engine(cli_engine, loaded.decode.clone());
     let mut pipeline = build_pipeline_config(
         resolved.freq_correction_ppm,
@@ -7083,33 +7063,23 @@ United States:    5:  8: NA:  40.0:  75.0:  5.0:  K:
     /// Flags with no config key, by design.
     const CLI_ONLY: &[&str] = &[
         "json",
-<<<<<<< HEAD
-=======
         "decoded_text",
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
         "duration",
         "config",
         "path",
         "help",
         "version",
-<<<<<<< HEAD
         "reference_hz",
         "search_ppm",
         "tune_hz",
         "write",
-=======
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
     ];
 
     #[test]
     fn every_config_backed_flag_maps_to_a_key() {
         use clap::CommandFactory;
         let cli = Cli::command();
-<<<<<<< HEAD
-        for name in ["run", "soak", "doctor", "decode", "calibrate"] {
-=======
-        for name in ["run", "soak", "doctor", "decode", "check"] {
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
+        for name in ["run", "soak", "doctor", "decode", "check", "calibrate"] {
             let sub = cli.find_subcommand(name).unwrap();
             for arg in sub.get_arguments() {
                 let id = arg.get_id().as_str();

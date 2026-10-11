@@ -56,11 +56,6 @@ MAN-79: `--cty`/`--scp` and `[spot].cty_path`/`scp_path` override the
 vendored `cty.dat`/`master.scp` at run time. `run`/`listen`/`soak`/`doctor`/
 `config check` warn when the built-in `cty.dat` is more than 180 days old.
 See docs/DECISIONS/2026-10-10-man79-operator-cty-scp-override.md.
-<<<<<<< HEAD
-MAN-127: `manta calibrate` measures the receiver's ppm offset against a
-known carrier and saves `[input].freq_correction_ppm` after confirmation —
-see docs/DECISIONS/2026-10-11-man127-calibrate-command.md.
-=======
 MAN-116: `manta bench sensitivity` produces the recall/CER-vs-SNR (500 Hz)
 table over AWGN/Watterson good/poor × WPM, deterministic per build and
 flags — see docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md.
@@ -74,7 +69,10 @@ MAN-125: `manta devices` lists audio inputs and optional Soapy selectors;
 `manta check [SOURCE]` reports stream rate, input power and passband noise
 floor without decoding or services. See
 `docs/DECISIONS/2026-10-10-man125-source-diagnostics.md`.
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
+
+MAN-127: `manta calibrate` measures the receiver's ppm offset against a
+known carrier and saves `[input].freq_correction_ppm` after confirmation —
+see docs/DECISIONS/2026-10-11-man127-calibrate-command.md.
 
 ## Documents (read in this order)
 

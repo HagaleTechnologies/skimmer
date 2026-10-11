@@ -97,7 +97,11 @@ adding to it.
      config file, or when a source-selector flag (`--source`, `--device`,
      `--kiwi-host`, and so on) replaced the file's `[input]`: that
      measurement describes a different receiver. `--tune-hz` is the way to
-     point the configured receiver at a reference.
+     point the configured receiver at a reference. The same refusal applies
+     when the file's `[input]` has a `type` and `MANTA_INPUT_TYPE`,
+     `_DEVICE`, `_PATH`, `_HOST`, `_PORT` or `_DRIVER` is set, because that
+     variable picks the receiver the way a selector flag does, even when it
+     repeats the file's own value.
    - When the file already holds the rounded value, it says so and writes
      nothing.
    - When `MANTA_INPUT_FREQ_CORRECTION_PPM` is set, it warns that the

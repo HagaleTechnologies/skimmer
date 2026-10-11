@@ -5,8 +5,10 @@
 // MAN-127. The measurement is manta_engine::calibrate; the file edit is
 // config_edit.rs. See docs/DECISIONS/2026-10-11-man127-calibrate-command.md.
 
-use crate::{config, config_edit, load_and_resolve, CliOverrides, LiveSourceSpec, Resolved};
-use anyhow::{bail, Result};
+use crate::{
+    config, config_edit, prepare_source, CliOverrides, LiveSourceSpec, Resolved, SourcePrepared,
+};
+use anyhow::{bail, Context, Result};
 use manta_engine::calibrate::{
     check_duration, plan_references, CalibrateOptions, CalibrationReport, PlannedReference,
     ReferenceResult, ReferenceStatus, MIN_AMBIGUITY_MARGIN_DB, MIN_VALID_SEGMENTS, SPREAD_WARN_HZ,
@@ -16,6 +18,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const PPM_ENV_VAR: &str = "MANTA_INPUT_FREQ_CORRECTION_PPM";
+/// The `MANTA_INPUT_*` variables that pick the receiver, as `--source`,
+/// `--device`, `--kiwi-host`, `--soapy-driver` and `--hpsdr-host` do, plus
+/// the port that, with the host, names a KiwiSDR or HPSDR receiver.
+const SOURCE_ENV_VARS: &[&str] = &[
+    "MANTA_INPUT_TYPE",
+    "MANTA_INPUT_DEVICE",
+    "MANTA_INPUT_PATH",
+    "MANTA_INPUT_HOST",
+    "MANTA_INPUT_PORT",
+    "MANTA_INPUT_DRIVER",
+];
 
 /// Everything `manta calibrate` was given on the command line.
 pub(crate) struct CalibrateArgs {
@@ -72,6 +85,20 @@ pub(crate) fn save_decision(
     } else {
         SaveDecision::Ask
     }
+}
+
+/// The source-selecting variable among `env_vars` when `file_text` has a
+/// typed `[input]`: that variable, like a selector flag, means the receiver
+/// being measured is not the one the file's `[input]` describes.
+fn env_replaced_file_source(env_vars: &[String], file_text: &str) -> Result<Option<&'static str>> {
+    let doc: toml::Table = toml::from_str(crate::strip_bom(file_text))?;
+    if doc.get("input").and_then(|t| t.get("type")).is_none() {
+        return Ok(None);
+    }
+    Ok(SOURCE_ENV_VARS
+        .iter()
+        .copied()
+        .find(|v| env_vars.iter().any(|e| e == v)))
 }
 
 /// Write `prompt` and read one answer: true only for `y` or `yes`, in any
@@ -303,7 +330,21 @@ pub(crate) fn run(args: CalibrateArgs) -> Result<()> {
         search_ppm: args.search_ppm,
         reference_hz: args.reference_hz,
     };
-    let (config_path, loaded, mut resolved) = load_and_resolve(args.cli, args.config)?;
+    let SourcePrepared {
+        config_path,
+        loaded,
+        mut resolved,
+    } = prepare_source(args.cli, args.config)?;
+    let replaced_by = match (resolved.replaced_file_source, config_path.as_deref()) {
+        (Some(flag), _) => Some(flag),
+        (None, Some(path)) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading config file {}", path.display()))?;
+            env_replaced_file_source(&loaded.env_vars, &text)
+                .with_context(|| format!("parsing config file {}", path.display()))?
+        }
+        (None, None) => None,
+    };
     if let Some(tune_hz) = args.tune_hz {
         apply_tune_hz(&mut resolved, tune_hz)?;
     }
@@ -311,10 +352,15 @@ pub(crate) fn run(args: CalibrateArgs) -> Result<()> {
         let Some(path) = config_path.as_deref() else {
             bail!("--write needs a config file: pass --config or set MANTA_CONFIG");
         };
-        if let Some(flag) = resolved.replaced_file_source {
+        if let Some(flag) = replaced_by {
+            let drop = if flag.starts_with("MANTA_") {
+                "unset"
+            } else {
+                "drop"
+            };
             bail!(
                 "--write would save a measurement of the receiver {flag} names into [input] of \
-                 {}, which describes a different receiver; drop {flag} and use --tune-hz to \
+                 {}, which describes a different receiver; {drop} {flag} and use --tune-hz to \
                  point the configured receiver at a reference",
                 path.display()
             );
@@ -368,9 +414,7 @@ pub(crate) fn run(args: CalibrateArgs) -> Result<()> {
             }
         }
         if let Some(path) = config_path.as_deref() {
-            if resolved.replaced_file_source.is_none()
-                && loaded.env_vars.iter().any(|v| v == PPM_ENV_VAR)
-            {
+            if replaced_by.is_none() && loaded.env_vars.iter().any(|v| v == PPM_ENV_VAR) {
                 eprintln!(
                     "warning: {PPM_ENV_VAR} is set and overrides freq_correction_ppm from {} for \
                      run, soak and doctor; unset it to use the saved value",
@@ -381,7 +425,7 @@ pub(crate) fn run(args: CalibrateArgs) -> Result<()> {
         let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
         let decision = save_decision(
             config_path.is_some(),
-            resolved.replaced_file_source,
+            replaced_by,
             file_value == Some(value),
             args.write,
             args.json,
@@ -414,7 +458,7 @@ pub(crate) fn run(args: CalibrateArgs) -> Result<()> {
             )),
             (SaveDecision::OtherReceiver(flag), Some(path)) => Some(format!(
                 "not saved: {flag} replaced the receiver [input] describes in {}; {run_hint} \
-                 with the same flags",
+                 with the same flags and environment",
                 path.display()
             )),
             (SaveDecision::NotInteractive, _) => Some(format!(
@@ -652,6 +696,34 @@ mod tests {
             NotInteractive
         );
         assert_eq!(save_decision(true, None, false, false, false, true), Ask);
+    }
+
+    #[test]
+    fn a_source_env_var_replaces_only_a_typed_file_input() {
+        let vars = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let typed = "[input]\ntype = \"kiwi\"\nhost = \"a\"\nport = 1\nfreq_hz = 7030000.0\n";
+        let host = vars(&["MANTA_INPUT_HOST"]);
+        assert_eq!(
+            env_replaced_file_source(&host, typed).unwrap(),
+            Some("MANTA_INPUT_HOST")
+        );
+        assert_eq!(
+            env_replaced_file_source(&vars(&["MANTA_INPUT_PATH", "MANTA_INPUT_TYPE"]), typed)
+                .unwrap(),
+            Some("MANTA_INPUT_TYPE")
+        );
+        assert_eq!(
+            env_replaced_file_source(&vars(&["MANTA_INPUT_PORT"]), typed).unwrap(),
+            Some("MANTA_INPUT_PORT")
+        );
+        assert_eq!(
+            env_replaced_file_source(&vars(&["MANTA_INPUT_FREQ_HZ", PPM_ENV_VAR]), typed).unwrap(),
+            None
+        );
+        assert_eq!(
+            env_replaced_file_source(&host, "[input]\nfreq_correction_ppm = 1.0\n").unwrap(),
+            None
+        );
     }
 
     fn resolved_with(spec: LiveSourceSpec) -> Resolved {

@@ -502,20 +502,12 @@ validation (MAN-28). Dedupe (step 5) still applies.
   `[[rbn_uplink]]`, `[input]` (source type and its keys, dial frequency,
   capture rate, ppm correction), `[spot]` (watch list, blocklist and notch
   files, and `cty.dat`/`master.scp` overrides), `[detector]` (thresholds, timers, track cap) and `[decode]` —
-<<<<<<< HEAD
-  read by `run`, `soak`, `doctor` and `calibrate` (`--config`, else
-  `MANTA_CONFIG`) and
-  by `decode`/`oracle`. Precedence is flag, then `MANTA_<TABLE>_<KEY>`
-  environment variable, then file, then default; `decode` and `oracle`
-  never read the environment. Unknown tables, keys and `MANTA_*` variables
-=======
-  read by `run`, `soak`, `doctor` and `check` (`--config`, else
+  read by `run`, `soak`, `doctor`, `check` and `calibrate` (`--config`, else
   `MANTA_CONFIG`) and by `decode`/`oracle`, and by `bench sensitivity`
   (which reads only `[decode]`/`[detector]`, never the environment).
   Precedence is flag, then `MANTA_<TABLE>_<KEY>` environment variable, then
   file, then default; `decode` and `oracle` never read the environment.
   Unknown tables, keys and `MANTA_*` variables
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
   are errors. `docs/SPEC-decode-core.md` §9 is the key table. Not yet
   configurable: a band plan (CW segment limits) and the
   compile-time constants SPEC §9 marks `not configurable yet`.
@@ -526,7 +518,6 @@ validation (MAN-28). Dedupe (step 5) still applies.
   scaffold with every key commented out at its default, pinned to the code
   defaults and the loader's key list by tests (MAN-76,
   `docs/DECISIONS/2026-10-07-man76-config-check-init.md`).
-<<<<<<< HEAD
   `manta calibrate` resolves `[input]` the way `doctor` does, measures the
   receiver's frequency error against a known carrier
   (`manta-dsp::carrier` estimates it, `manta-engine::calibrate` picks the
@@ -534,7 +525,6 @@ validation (MAN-28). Dedupe (step 5) still applies.
   `input.freq_correction_ppm` in place in the file it read, keeping every
   other byte, the file's mode and owner (MAN-127,
   `docs/DECISIONS/2026-10-11-man127-calibrate-command.md`).
-=======
 - **Source diagnostics (MAN-125)**: `manta devices` enumerates audio inputs
   and, when compiled, SoapySDR selectors without opening capture streams.
   `manta check [SOURCE]` shares typed config/source resolution and source wrappers
@@ -545,7 +535,6 @@ validation (MAN-28). Dedupe (step 5) still applies.
   effective neighborhood floor used by decoding is unchanged. See
   `docs/DECISIONS/2026-10-10-man125-source-diagnostics.md` for units, stop reasons
   and the cooperative deadline's blocking-call limitation.
->>>>>>> 9644a7f89371abcd3c9ceae356ed0760739fa886
 - **`tracing` + `tracing-subscriber` with `EnvFilter`, implemented for
   `manta-server`'s three listeners (telnet, JSON/WS, metrics)** — landed
   2026-09-03 (MAN-59, `docs/DECISIONS/2026-09-03-man59-connection-audit-logging.md`):

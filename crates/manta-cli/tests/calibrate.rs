@@ -234,6 +234,30 @@ fn calibrate_write_refuses_a_replaced_receiver() {
 }
 
 #[test]
+fn calibrate_write_refuses_a_receiver_the_environment_selects() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = fixture(dir.path(), Some(CARRIER_2_5_PPM), CENTRE);
+    let body = "[input]\ntype = \"kiwi\"\nhost = \"127.0.0.1\"\nport = 1\nfreq_hz = 7030000.0\n";
+    let cfg = write_cfg(dir.path(), body);
+    let out = manta()
+        .env("MANTA_INPUT_TYPE", "file")
+        .env("MANTA_INPUT_PATH", &wav)
+        .env("MANTA_INPUT_IQ", "true")
+        .args(["calibrate", "--duration", "12", "--write", "--config"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = text(&out.stderr);
+    assert!(
+        stderr.contains("--write would save a measurement of the receiver MANTA_INPUT_TYPE names"),
+        "{stderr}"
+    );
+    assert!(out.stdout.is_empty());
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), body);
+}
+
+#[test]
 fn calibrate_explains_an_empty_passband() {
     let dir = tempfile::tempdir().unwrap();
     fixture(dir.path(), None, 7_030_000.0);
