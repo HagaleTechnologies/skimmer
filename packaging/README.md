@@ -182,7 +182,12 @@ verify` must report no errors for the unit.
   `/run/log/journal`, set in `/etc/systemd/journald.conf` or a drop-in
   under `/etc/systemd/journald.conf.d/`. Each defaults to 10% of its file
   system, capped at 4 GiB. The kit installs no journald override.
-  `journalctl --disk-usage` shows what the journal uses now.
+  `journalctl --disk-usage` shows what the journal uses now. The journal
+  gets plain text, with no colour codes. To change the level or format,
+  run `sudo systemctl edit manta` and add a drop-in that clears
+  `ExecStart=` and sets it again with `-q` or `--log-format json`
+  appended, or that sets `Environment=RUST_LOG=warn`; see the `## Logs`
+  section of the top-level README.md.
 
 ## macOS: LaunchDaemon
 
@@ -250,7 +255,9 @@ each file.
   would leave manta writing to the renamed file. Limits: the log can grow
   past 10 MiB between runs, or while the job cannot run, and lines manta
   writes during the copy can be lost. This is operational log retention,
-  not a strict disk quota or a lossless audit log.
+  not a strict disk quota or a lossless audit log. The log gets plain
+  text, with no colour codes. To change the level or format, add `-q` or
+  `--log-format json` to the installed plist's `ProgramArguments`.
 - **Checking rotation.** The job discards its own output, so a failure
   shows only in its exit status:
   `sudo launchctl print system/com.hagaletechnologies.manta-logrotate`
@@ -338,7 +345,8 @@ is invalid.
   Docker starts, unless you stopped it.
 - **Logs.** The `json-file` driver rotates the container's log at 10 MB
   and keeps 3 files (`max-size: "10m"`, `max-file: "3"`), about 30 MB in
-  all. `RUST_LOG=info` sets the log level.
+  all. `RUST_LOG=info` sets the log level. For JSON log lines, append
+  `"--log-format", "json"` to `command:`.
 - **Not enabled.** No device passthrough, privileged mode or host
   networking: use a network receiver.
 

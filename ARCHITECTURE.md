@@ -533,8 +533,11 @@ validation (MAN-28). Dedupe (step 5) still applies.
   2026-09-03 (MAN-59, `docs/DECISIONS/2026-09-03-man59-connection-audit-logging.md`):
   connect/login/disconnect events, per-IP quota and rate-limit rejections,
   `bounded_io` read rejections, malformed-WS-frame disconnects, and
-  rejected metrics-endpoint requests are all logged (plain `fmt` output,
-  `RUST_LOG`-controlled, default `info`) to give an operator a durable
+  rejected metrics-endpoint requests are all logged (text, coloured only
+  when stderr is a terminal, or JSON Lines with `--log-format json`; level
+  from `-v`/`-q`/`--log-level`, else `RUST_LOG`, default `info`; installed
+  by `manta-cli/src/logging.rs` at the top of `run`, MAN-124,
+  `docs/DECISIONS/2026-10-10-man124-log-output.md`) to give an operator a durable
   record to reconstruct an abuse incident after the fact. **The daemon
   also logs its own liveness** — landed 2026-09-07 (MAN-122,
   `docs/DECISIONS/2026-09-07-man122-operator-liveness-logging.md`): one
