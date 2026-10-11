@@ -64,6 +64,11 @@ MAN-116: `manta bench sensitivity` produces the recall/CER-vs-SNR (500 Hz)
 table over AWGN/Watterson good/poor × WPM, deterministic per build and
 flags — see docs/DECISIONS/2026-10-10-man116-sensitivity-benchmark.md.
 
+MAN-123: `run`'s plain-text mode prints decoded text on stderr grouped one
+line per track and `SPOT:` lines on stdout; with a `[server]` table decoded
+text is off unless `--decoded-text` — see
+docs/DECISIONS/2026-10-10-man123-grouped-decoded-text.md.
+
 ## Documents (read in this order)
 
 - `README.md` — goals and non-goals

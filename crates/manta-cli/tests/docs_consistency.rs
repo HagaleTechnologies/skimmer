@@ -161,6 +161,18 @@ fn readme_outputs_describes_shipped_servers() {
     }
 }
 
+/// MAN-123: README Outputs says where `run`'s human output goes.
+#[test]
+fn readme_outputs_says_where_run_prints_spots_and_decoded_text() {
+    let outputs = squash_whitespace(section(&doc("README.md"), "Outputs"));
+    for needle in ["stdout", "stderr", "one line per track", "--decoded-text"] {
+        assert!(
+            outputs.contains(needle),
+            "README Outputs never mentions `{needle}`"
+        );
+    }
+}
+
 /// The Status block must not list shipped work as upcoming.
 #[test]
 fn readme_status_does_not_promise_shipped_work() {

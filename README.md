@@ -353,9 +353,14 @@ only if that config also carries at least one `[[rbn_uplink]]` block.
   source-health counters. Some gauges are still placeholders;
   ARCHITECTURE §8 says which.
 
-`decode` and `listen` also print decoded text or `--json` events on
-stdout. That output is a debugging aid, not a stable interface — the
-servers above are.
+`run` (alias `listen`) also prints a `SPOT:` line on stdout for each
+confirmed spot, and decoded text on stderr, one line per track labelled
+with its track number, frequency and speed. With a `[server]` table the
+decoded text is off unless you pass `--decoded-text`, so a service log
+holds spots and diagnostics only. `--json` prints every decoder event and
+spot as JSON Lines on stdout instead. `decode` prints its decoded text on
+stdout. This terminal output is a debugging aid, not a stable interface —
+the servers above are.
 
 The decode path is deterministic: the same file in produces byte-identical
 spot logs out. That is a hard requirement, and CI enforces it with golden
