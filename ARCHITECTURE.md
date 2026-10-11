@@ -502,11 +502,12 @@ validation (MAN-28). Dedupe (step 5) still applies.
   `[[rbn_uplink]]`, `[input]` (source type and its keys, dial frequency,
   capture rate, ppm correction), `[spot]` (watch list, blocklist and notch
   files, and `cty.dat`/`master.scp` overrides), `[detector]` (thresholds, timers, track cap) and `[decode]` —
-  read by `run`, `soak` and `doctor` (`--config`, else `MANTA_CONFIG`) and
-  by `decode`/`oracle`, and by `bench sensitivity` (which reads only
-  `[decode]`/`[detector]`, never the environment). Precedence is flag, then
-  `MANTA_<TABLE>_<KEY>` environment variable, then file, then default;
-  `decode` and `oracle` never read the environment. Unknown tables, keys and `MANTA_*` variables
+  read by `run`, `soak`, `doctor` and `check` (`--config`, else
+  `MANTA_CONFIG`) and by `decode`/`oracle`, and by `bench sensitivity`
+  (which reads only `[decode]`/`[detector]`, never the environment).
+  Precedence is flag, then `MANTA_<TABLE>_<KEY>` environment variable, then
+  file, then default; `decode` and `oracle` never read the environment.
+  Unknown tables, keys and `MANTA_*` variables
   are errors. `docs/SPEC-decode-core.md` §9 is the key table. Not yet
   configurable: a band plan (CW segment limits) and the
   compile-time constants SPEC §9 marks `not configurable yet`.
@@ -517,6 +518,16 @@ validation (MAN-28). Dedupe (step 5) still applies.
   scaffold with every key commented out at its default, pinned to the code
   defaults and the loader's key list by tests (MAN-76,
   `docs/DECISIONS/2026-10-07-man76-config-check-init.md`).
+- **Source diagnostics (MAN-125)**: `manta devices` enumerates audio inputs
+  and, when compiled, SoapySDR selectors without opening capture streams.
+  `manta check [SOURCE]` shares typed config/source resolution and source wrappers
+  with `run`, then calls `manta_engine::check::check_source`. It drives only
+  `Channelizer` and `FloorBank`, with no detector, decoder, validator or services.
+  Input power uses real delivered IQ; noise floor summarizes raw channel
+  quartiles inside the source passband, clipped to delivered Nyquist. The
+  effective neighborhood floor used by decoding is unchanged. See
+  `docs/DECISIONS/2026-10-10-man125-source-diagnostics.md` for units, stop reasons
+  and the cooperative deadline's blocking-call limitation.
 - **`tracing` + `tracing-subscriber` with `EnvFilter`, implemented for
   `manta-server`'s three listeners (telnet, JSON/WS, metrics)** — landed
   2026-09-03 (MAN-59, `docs/DECISIONS/2026-09-03-man59-connection-audit-logging.md`):

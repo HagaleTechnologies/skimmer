@@ -337,6 +337,53 @@ The source frequency and rate flags end in `-hz`: `--kiwi-freq-hz`,
 `--hpsdr-rate-hz`. The older `--kiwi-freq` / `--soapy-freq` /
 `--soapy-rate` / `--hpsdr-freq` / `--hpsdr-rate` spellings still work.
 
+### Check that samples reach manta
+
+List inputs, check the selected source, then use `doctor` to assess decoding:
+
+```sh
+manta devices
+manta check --device "USB Audio"
+manta check --config manta.toml --json
+manta check capture.wav --source-iq
+manta doctor --config manta.toml --duration 10
+```
+
+Audio selectors are names matched case-insensitively by substring, not numeric
+indexes. `devices` lists input-capable devices without opening a stream. With
+`--features soapy`, it also lists complete Soapy selector strings for
+`--soapy-driver`. HPSDR discovery is not supported; use `--hpsdr-host HOST`
+with an `hpsdr` build. KiwiSDR uses `--kiwi-host HOST`. `devices --json` reports
+empty, unavailable and failed enumeration separately; a backend error exits 1
+while retaining the other results.
+
+`check [SOURCE]` treats SOURCE as an audio WAV path, equivalent to `--source`.
+Audio files must be mono at 48000 Hz; add `--source-iq` for complex stereo IQ.
+Only one source selector is accepted. It replaces a configured input wholesale,
+just like `run`. With no selector, `check` uses `--config`, then `MANTA_CONFIG`,
+then environment/default settings; it does not search for `./manta.toml`.
+`manta config check` validates configuration without opening a receiver;
+`manta check` opens it and reads samples without decoding, listeners or uplinks.
+It validates typed config but does not read unused spot asset files.
+
+The default window is three seconds of delivered samples; `--duration` accepts
+1 to 60 seconds. The report shows the actual **stream sample rate** after
+resampling and `--capture-rate-hz` decimation, center frequency, passband,
+received sample count, input power and a brief per-channel noise-floor estimate.
+KiwiSDR's stream rate is 96000 Hz after resampling, not its native receiver rate.
+Power is relative dBFS, not calibrated RF power, dBm or spot SNR. The floor is
+the lower quartile in each eligible channel, summarized across the passband.
+See the [measurement definition](docs/DECISIONS/2026-10-10-man125-source-diagnostics.md).
+
+Digital silence is reported explicitly and can exit 0 because samples arrived.
+It does not prove that an antenna is connected. Empty input or input too short
+for a complete channelizer hop has no floor and exits 1; a shorter file with a
+measured floor exits 0 and reports its actual duration and end of file. Errors
+go to stderr; `--json` emits one report on stdout. A sampling deadline exits 1
+and retains any measurements. The deadline is duration plus five seconds after
+opening, checked between reads. Native open/read calls can exceed it, so
+`--duration` is not a hard wall-clock timeout. No reconnect loop runs.
+
 Targets Linux (x86-64 and ARM, Raspberry Pi 4 class), macOS, and Windows.
 The CPU budget is a full 192 kS/s passband inside one Raspberry Pi 4 core,
 enforced by criterion benches.
